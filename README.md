@@ -85,3 +85,4 @@ If schema load fails after publish, it is almost always firewall / routing betwe
 - Rotate credentials after testing if they were shared in chat or committed by mistake.
 
 ## Tset for github
+## Test for github by duj43
