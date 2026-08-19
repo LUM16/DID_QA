@@ -83,3 +83,5 @@ If schema load fails after publish, it is almost always firewall / routing betwe
 
 - Prefer Connect Vars for passwords and client secrets.
 - Rotate credentials after testing if they were shared in chat or committed by mistake.
+
+## Tset for github
