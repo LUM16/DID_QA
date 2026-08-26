@@ -24,7 +24,19 @@ EXAMPLE_KEYWORDS = {
     "team_manager.md": ("manager", "group lead", "ta lead", "team", "reports to", "经理", "团队"),
     "reporting_dashboard.md": ("dashboard", "kpi", "trend", "monthly", "reporting", "看板", "报表"),
 }
-DEFAULT_EXAMPLES = ("query_index.md", "study_delivery.md", "workload_planning.md")
+DEFAULT_EXAMPLES = (
+    "query_index.md",
+    "study_delivery.md",
+    "workload_planning.md",
+    "person_productivity.md",
+    "lot_tlf_sdtm_adam.md",
+    "team_manager.md",
+    "reporting_dashboard.md",
+    "uncategorized.md",
+)
+SAFE_EXAMPLE_FILES = tuple(
+    name for name in DEFAULT_EXAMPLES if name != "sensitive_excluded.md"
+)
 SKILL_MAX_CHARS = 6000
 SCHEMA_MAX_CHARS = 12000
 EXAMPLE_MAX_CHARS = 5000
@@ -85,8 +97,11 @@ def _build_domain_context(question: str) -> str:
         schema_text,
     ]
 
-    for filename in _select_examples(question):
+    selected = _select_examples(question)
+    for filename in (*selected, *[name for name in SAFE_EXAMPLE_FILES if name not in selected]):
         example_path = EXAMPLES_ROOT / filename
+        if not example_path.exists():
+            continue
         example_text = _read_doc(f"examples/{filename}")[:EXAMPLE_MAX_CHARS]
         parts.extend(
             [
@@ -115,8 +130,9 @@ Rules:
 5. Common pattern: (:Study)-[:HAS_DELIVERY]->(:Delivery).
 6. Use only property keys that appear in schema.propertyKeys.
 7. Cypher keywords stay in English; do not translate labels/properties.
-8. Follow rules and safe patterns from docs/skill.md and docs/examples/*.md.
-9. Do not generate employee ranking/performance-scoring queries."""
+8. Follow rules and safe patterns from docs/skill.md, docs/schema.md, and docs/examples/*.md (ignore sensitive_excluded.md).
+9. Prefer business query patterns from person_productivity.md, workload_planning.md, study_delivery.md, lot_tlf_sdtm_adam.md, team_manager.md, reporting_dashboard.md, and query_index.md.
+10. Do not generate employee ranking/performance-scoring queries."""
 
     user = f"""Schema:
 {schema_text}
@@ -130,6 +146,45 @@ Conversation history:
 User question: {question}
 
 Generate a read-only Cypher query."""
+
+    raw, usage = _chat(system, user)
+    return _extract_cypher(raw), usage
+
+
+def repair_cypher(question: str, schema: dict[str, Any], previous_cypher: str, previous_rows: list[dict[str, Any]], history: list[dict[str, str]] | None = None) -> tuple[str, dict[str, int]]:
+    schema_text = json.dumps(schema, ensure_ascii=False, indent=2)
+    history_text = ""
+    if history:
+        recent = history[-6:]
+        history_text = "\n".join(f"{m['role']}: {m['content']}" for m in recent)
+
+    system = """You are a Neo4j query repair assistant. The previous Cypher query returned no data, but the user likely expects business results. Fix the query by keeping it read-only and using only valid property names from the schema.
+Rules:
+1. Output exactly one Cypher statement inside a ```cypher code block.
+2. Do not invent property names; follow schema.propertyKeys exactly.
+3. Correct common date bugs: use `Planned_Delivery_Date` / `Actual_Delivery_Date` and filter on the actual date field instead of a transformed or missing property.
+4. Keep the business date filter in the WHERE clause or MATCH path, and do not hide it inside an OPTIONAL MATCH without a real predicate.
+5. When the question mentions a month or year, apply the filter to the date field and keep it aligned with the user’s requested period.
+6. Preserve the original business intent and return the relevant rows.
+7. Prefer the safe patterns from docs/skill.md and docs/examples/*.md (skip sensitive_excluded.md).
+8. Never use CREATE/MERGE/DELETE/SET/REMOVE/DROP or other write operations."""
+
+    user = f"""Schema:
+{schema_text}
+
+Conversation history:
+{history_text or '(none)'}
+
+User question: {question}
+
+Previous Cypher:
+{previous_cypher}
+
+Previous query returned zero rows.
+
+Use the schema and business intent to repair the query so it returns the expected data for the asked period.
+
+Generate a corrected read-only Cypher query."""
 
     raw, usage = _chat(system, user)
     return _extract_cypher(raw), usage
@@ -158,6 +213,33 @@ Write the answer now."""
     return _chat(system, user)
 
 
+def _needs_repair(question: str, rows: list[dict[str, Any]], cypher: str) -> bool:
+    if rows:
+        return False
+    q = question.lower()
+    date_keywords = (
+        "august",
+        "september",
+        "january",
+        "february",
+        "march",
+        "april",
+        "may",
+        "june",
+        "july",
+        "month",
+        "year",
+        "planned delivery",
+        "actual delivery",
+        "delivery date",
+        "delivered",
+        "delivery",
+    )
+    if any(keyword in q for keyword in date_keywords):
+        return True
+    return "optional match" in cypher.lower() and "where" in cypher.lower()
+
+
 def ask(question: str, history: list[dict[str, str]] | None = None, schema: dict[str, Any] | None = None) -> dict[str, Any]:
     load_env()
     schema = schema or get_schema()
@@ -171,6 +253,13 @@ def ask(question: str, history: list[dict[str, str]] | None = None, schema: dict
             cypher, u1 = generate_cypher(question + hint, schema, history)
             usage = add_usage(usage, u1)
             rows = run_cypher(cypher)
+
+            if not rows and _needs_repair(question, rows, cypher):
+                repaired, u_repair = repair_cypher(question, schema, cypher, rows, history)
+                usage = add_usage(usage, u_repair)
+                rows = run_cypher(repaired)
+                cypher = repaired
+
             answer, u2 = answer_from_rows(question, cypher, rows)
             usage = add_usage(usage, u2)
             return {
