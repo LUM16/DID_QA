@@ -6,7 +6,7 @@ import streamlit as st
 
 from agent import ask
 from neo4j_client import connection_summary, get_schema, load_env
-from vox_client import add_usage, empty_usage
+from vox_client import add_usage, empty_usage, models_vox_genai
 
 st.set_page_config(
     page_title="Neo4j QA (RSC)",
@@ -63,6 +63,19 @@ with st.sidebar:
     st.caption(f"URI: `{connection_summary()}`")
     st.caption("Database: `neo4j` · read-only")
 
+    st.divider()
+    st.markdown("# List available Vox GenAI V2 models")
+    try:
+        available_models = models_vox_genai()
+        if available_models:
+            for model_name in available_models:
+                st.caption(f"- `{model_name}`")
+        else:
+            st.warning("models_vox_genai() returned no available models.")
+    except Exception as exc:  # noqa: BLE001
+        st.error(f"Failed to load Vox GenAI models: {exc}")
+
+    st.divider()
     st.session_state.show_cypher = st.toggle(
         "Show generated Cypher", value=st.session_state.show_cypher
     )
