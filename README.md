@@ -12,7 +12,7 @@ Uses network Neo4j + Pfizer Vox GenAI.
 | `app.py` | Streamlit entry point (publish this) |
 | `agent.py` | NL → Cypher → answer (loads domain docs/examples for few-shot prompting) |
 | `neo4j_client.py` | Read-only Neo4j access |
-| `vox_client.py` | Vox OAuth + chat completions |
+| `vox_client.py` | Vox OAuth + chat completions + model listing |
 | `docs/skill.md` | DID query skill rules |
 | `docs/schema.md` | DID graph schema reference |
 | `docs/examples/*.md` | Reusable DID Cypher few-shot examples |
