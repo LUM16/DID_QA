@@ -99,6 +99,23 @@ def build_llm_client() -> tuple[OpenAI, str]:
     )
 
 
+def models_vox_genai() -> list[str]:
+    client, _ = build_llm_client()
+    response = client.models.list()
+    data = getattr(response, "data", None)
+    if data is None:
+        raise RuntimeError("Vox models.list() response missing data")
+
+    model_ids: list[str] = []
+    for item in data:
+        model_id = getattr(item, "id", None)
+        if isinstance(model_id, str) and model_id.strip():
+            model_ids.append(model_id.strip())
+
+    # Keep order stable while de-duplicating.
+    return list(dict.fromkeys(model_ids))
+
+
 def chat(system: str, user: str, temperature: float = 0.1) -> tuple[str, dict[str, int]]:
     client, model = build_llm_client()
     messages = [
