@@ -10,9 +10,13 @@ Uses network Neo4j + Pfizer Vox GenAI.
 | File | Role |
 |------|------|
 | `app.py` | Streamlit entry point (publish this) |
-| `agent.py` | NL → Cypher → answer |
+| `agent.py` | NL → Cypher → answer (loads domain docs/examples for few-shot prompting) |
 | `neo4j_client.py` | Read-only Neo4j access |
 | `vox_client.py` | Vox OAuth + chat completions |
+| `docs/skill.md` | DID query skill rules |
+| `docs/schema.md` | DID graph schema reference |
+| `docs/examples/*.md` | Reusable DID Cypher few-shot examples |
+| `.github/agents/did-neo4j-qa.agent.md` | Copilot CLI custom agent template (optional) |
 | `requirements.txt` | Python deps |
 | `manifest.json` | Required for Git-backed Connect deploy |
 | `GITHUB_DEPLOY.md` | GitHub + Import from Git instructions |
@@ -28,6 +32,15 @@ py -m streamlit run app.py
 ```
 
 Open http://127.0.0.1:8501
+
+## Prompt knowledge reuse (from previous CLI agent)
+
+- The app now reuses the existing DID prompt library under `docs/`.
+- For each user question, `agent.py` loads:
+  - `docs/skill.md`
+  - `docs/schema.md`
+  - the most relevant example files from `docs/examples/*.md`
+- This keeps existing examples usable after you push to GitHub and deploy on RSC.
 
 ## Deploy to Posit Connect
 
@@ -83,6 +96,3 @@ If schema load fails after publish, it is almost always firewall / routing betwe
 
 - Prefer Connect Vars for passwords and client secrets.
 - Rotate credentials after testing if they were shared in chat or committed by mistake.
-
-## Tset for github
-## Test for github by duj43

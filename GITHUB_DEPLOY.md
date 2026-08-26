@@ -17,6 +17,8 @@
 | `agent.py` | 自然语言 → Cypher → 回答 |
 | `neo4j_client.py` | Neo4j 只读查询 |
 | `vox_client.py` | Vox GenAI OAuth + 对话 |
+| `docs/` | DID 规则与 examples（用于 few-shot 提示） |
+| `.github/agents/did-neo4j-qa.agent.md` | 可选：Copilot CLI agent 模板 |
 | `requirements.txt` | Python 依赖 |
 | `.python-version` | 指定 Python 3.11.1 |
 | `.gitignore` | 防止把密钥和本地文件推上去 |
@@ -35,6 +37,11 @@ did-qa-rsc/                  # GitHub 仓库根目录
 ├── agent.py
 ├── neo4j_client.py
 ├── vox_client.py
+├── docs/
+│   ├── skill.md
+│   ├── schema.md
+│   └── examples/*.md
+├── .github/agents/did-neo4j-qa.agent.md
 ├── requirements.txt
 ├── .python-version
 ├── .gitignore
@@ -97,6 +104,8 @@ Get-Content .env -ErrorAction SilentlyContinue | Select-Object -First 1
 git init -b main
 
 git add app.py agent.py neo4j_client.py vox_client.py requirements.txt
+git add docs\skill.md docs\schema.md docs\examples\*.md
+git add .github\agents\did-neo4j-qa.agent.md
 git add manifest.json .python-version .gitignore .rscignore .env.example
 git add README.md GITHUB_DEPLOY.md start-local.bat
 

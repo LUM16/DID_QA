@@ -6,10 +6,10 @@
     "entrypoint": "app.py"
   },
   "python": {
-    "version": "3.11.1",
+    "version": "3.13.0",
     "package_manager": {
       "name": "pip",
-      "version": "22.3.1",
+      "version": "24.2",
       "package_file": "requirements.txt"
     }
   },
@@ -23,34 +23,73 @@
       "checksum": "9864d425a2f34d7b097ad61a1eb77b8d"
     },
     ".env.example": {
-      "checksum": "6a6205bc56a3f77720ef04cf53d778fa"
+      "checksum": "8e308fb2278c242b241b9bc24a137246"
+    },
+    ".github/agents/did-neo4j-qa.agent.md": {
+      "checksum": "3b6558fe031380a38b53ad2209632563"
     },
     ".gitignore": {
-      "checksum": "f3453c5ea720314ddebd0d7db7787b67"
+      "checksum": "4a9c11d312cf854d898e954769c2844d"
     },
     ".python-version": {
-      "checksum": "3d422ce087cdb6a52021b017f42d810a"
+      "checksum": "9685208dd0aa86cd4c849e6291c5bce2"
     },
     ".rscignore": {
-      "checksum": "0ee86851299aa99c018a3a8bc4258154"
+      "checksum": "e8ab67d8d905fff239766d0931c08d01"
     },
     "GITHUB_DEPLOY.md": {
-      "checksum": "b13f522b38ebb7bd7b72d44a8f879ff8"
+      "checksum": "a578fea7ef0802cef8aa65b5cb41fa79"
     },
     "README.md": {
-      "checksum": "e754a0aaa79e400d99ff5f6821c89b3f"
+      "checksum": "e2feee86aae853167e0bc90ccc772ab5"
     },
     "agent.py": {
-      "checksum": "7988e70b182f3b326a9998baab1b73f4"
+      "checksum": "890bb585b80033680e5809c692031069"
     },
     "app.py": {
-      "checksum": "d303fe6f89499ddfa4a765d1db1aec93"
+      "checksum": "4858d831d90b17efa48b22df68d5f4b6"
+    },
+    "docs/examples/lot_tlf_sdtm_adam.md": {
+      "checksum": "6d3fdded0956349e0e9d33a33d69d59c"
+    },
+    "docs/examples/person_productivity.md": {
+      "checksum": "ea9989697575852a90ce55a02c97fc8b"
+    },
+    "docs/examples/query_index.md": {
+      "checksum": "1590746a3d5ce1c23c032e1c1c84f651"
+    },
+    "docs/examples/reporting_dashboard.md": {
+      "checksum": "266d26d50c08267296b7b7357702e9e1"
+    },
+    "docs/examples/sensitive_excluded.md": {
+      "checksum": "90848ca9cdc55b6efa40bfacd157941e"
+    },
+    "docs/examples/study_delivery.md": {
+      "checksum": "7b31b7893c24041d484a029d312d7d81"
+    },
+    "docs/examples/team_manager.md": {
+      "checksum": "153d20fad2328947321230c99e5b1eb4"
+    },
+    "docs/examples/uncategorized.md": {
+      "checksum": "ca426536a4db31fc09f7c7def0ee5ef4"
+    },
+    "docs/examples/workload_planning.md": {
+      "checksum": "2fde5da21574402294585aaf79379a1c"
+    },
+    "docs/schema.md": {
+      "checksum": "9675359d76208dcfa3bb1affca509bcd"
+    },
+    "docs/skill.md": {
+      "checksum": "1e0123f63b4c2f8a76b94ddb1eb300a9"
     },
     "neo4j_client.py": {
-      "checksum": "cf8e03df9cccbe025de2eefd6a64fd3e"
+      "checksum": "0a5a049c6707301258914dad5c25857f"
+    },
+    "start-local.bat": {
+      "checksum": "66058e80332d111b6333e31a9a43fe84"
     },
     "vox_client.py": {
-      "checksum": "3eee6f59ef4aea5006d3e22133e2f650"
+      "checksum": "997f8a3a619bdcaebfba056e814909b3"
     }
   }
 }
