@@ -38,7 +38,7 @@ def load_env() -> None:
 
 def get_driver():
     load_env()
-    uri = os.environ.get("NEO4J_URI", "bolt://10.109.17.64:7687")
+    uri = os.environ.get("NEO4J_URI", "bolt://10.109.2.157:7687")
     user = os.environ.get("NEO4J_USERNAME", "neo4j")
     password = os.environ.get("NEO4J_PASSWORD")
     if not password:
