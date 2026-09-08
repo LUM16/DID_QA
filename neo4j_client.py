@@ -111,4 +111,4 @@ def get_schema() -> dict[str, Any]:
 
 def connection_summary() -> str:
     load_env()
-    return os.environ.get("NEO4J_URI", "bolt://10.109.17.64:7687")
+    return os.environ.get("NEO4J_URI", "bolt://10.109.2.157:7687")
