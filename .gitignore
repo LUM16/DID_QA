@@ -31,3 +31,7 @@ Thumbs.db
 *.pem
 *.key
 credentials.json
+
+# Generated effort-prediction data and models
+artifacts/
+data/

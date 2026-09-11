@@ -33,6 +33,67 @@ py -m streamlit run app.py
 
 Open http://127.0.0.1:8501
 
+## DID effort prediction
+
+The project includes a read-only Neo4j-to-model pipeline for forecasting the
+total hands-on hours for a person assigned to a planned or ongoing DID.
+
+Detailed technical documentation: [Chinese](docs/effort_prediction.md) | [English](docs/effort_prediction_en.md).
+
+Install dependencies, then export completed DID history:
+
+```cmd
+py effort_prediction.py extract --output data\did_effort_training.json
+```
+
+Review the printed data-quality report before training. Train with a grouped
+time split (70% train, 15% interval calibration, 15% test):
+
+```cmd
+py effort_prediction.py train --input data\did_effort_training.json --model artifacts\did_effort_model.joblib
+```
+
+The training command reports MAE, median absolute error, RMSE, WAPE, bias, and
+P80/P90 coverage. It saves the fitted preprocessing pipeline, model, interval
+adjustments, and eligible history in one versioned artifact.
+
+Predict a planned or ongoing assignment:
+
+```cmd
+py effort_prediction.py predict --model artifacts\did_effort_model.joblib --person "Chen, Sizhen" --did "DID123"
+```
+
+Use `--as-of-date YYYY-MM-DD` for a historical/current-state forecast. Only
+completed records strictly before that date contribute to personal efficiency
+and similarity features. Generated exports and model artifacts are gitignored.
+
+### Natural-language Agent integration
+
+After a trained model exists at `artifacts/did_effort_model.joblib`, the normal
+Streamlit chat automatically routes explicit prediction questions to the model:
+
+```text
+预测 Riven 完成 C5001001_59 需要多少工时？
+Predict Riven's effort for C5001001_59.
+```
+
+The Agent parses common Chinese and English prediction requests locally. It
+uses Vox only as a fallback for complex parameter wording. Python loads the
+cached model and computes P50/P80/P90; the LLM does not calculate or alter
+prediction values. Ordinary historical-hours and Neo4j questions continue
+through the existing read-only Text-to-Cypher flow.
+
+Important limitations:
+
+- The label is total recorded hands-on hours, not calendar duration.
+- Training excludes incomplete DID records and invalid/zero labels.
+- If `TIME_ON` cannot distinguish Generation from QC, the model predicts the
+  combined Person x DID effort.
+- TLF/ADaM/SDTM similarity is person-specific where assignment metadata is
+  available. Similarity is a learned feature, not a hard-coded discount.
+- Strict historical backtesting requires versioned scope snapshots. With only
+  the current graph state, evaluation is a current-state approximation.
+
 ## Prompt knowledge reuse (from previous CLI agent)
 
 - The app now reuses the existing DID prompt library under `docs/`.

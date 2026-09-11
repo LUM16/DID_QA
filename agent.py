@@ -8,6 +8,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from effort_prediction import predict_effort
 from neo4j_client import get_schema, load_env, run_cypher
 from vox_client import add_usage, chat as _chat, empty_usage
 
@@ -48,6 +49,22 @@ LANGUAGE_RULE = (
     "respond in English. Do not switch languages mid-answer unless quoting data labels."
 )
 
+EFFORT_PREDICTION_PATTERNS = (
+    r"预测",
+    r"预计",
+    r"预估",
+    r"估算.*(?:工时|时间|小时)",
+    r"需要多久",
+    r"还需要多少.*(?:工时|时间|小时)",
+    r"\bforecast\b",
+    r"\bpredict(?:ion)?\b",
+    r"\bestimat(?:e|ed|ion)\b.*\b(?:effort|hours?|time)\b",
+    r"\bhow long will\b",
+    r"\bexpected (?:effort|hours?|time)\b",
+)
+DID_PATTERN = re.compile(r"\b[A-Za-z][A-Za-z0-9-]*_\d+\b")
+ISO_DATE_PATTERN = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
+
 
 def _extract_cypher(text: str) -> str:
     match = CYPHER_BLOCK.search(text)
@@ -58,6 +75,195 @@ def _extract_cypher(text: str) -> str:
         if s.upper().startswith(("MATCH", "CALL", "WITH", "RETURN", "OPTIONAL", "UNWIND")):
             return s.rstrip(";")
     raise ValueError(f"Could not parse Cypher from model output:\n{text}")
+
+
+def _is_effort_prediction_question(question: str) -> bool:
+    return any(
+        re.search(pattern, question, re.IGNORECASE)
+        for pattern in EFFORT_PREDICTION_PATTERNS
+    )
+
+
+def _extract_json_object(text: str) -> dict[str, Any]:
+    stripped = text.strip()
+    fenced = re.search(r"```(?:json)?\s*([\s\S]*?)```", stripped, re.IGNORECASE)
+    if fenced:
+        stripped = fenced.group(1).strip()
+    else:
+        match = re.search(r"\{[\s\S]*\}", stripped)
+        if match:
+            stripped = match.group(0)
+    payload = json.loads(stripped)
+    if not isinstance(payload, dict):
+        raise ValueError("Prediction parameter response must be a JSON object.")
+    return payload
+
+
+def _extract_effort_parameters_locally(
+    question: str,
+) -> dict[str, str | None] | None:
+    did_match = DID_PATTERN.search(question)
+    if not did_match:
+        return None
+
+    prefix = question[: did_match.start()].strip(" ,，:：")
+    prefix = re.sub(
+        r"^(?:请|请帮我|帮我)?\s*(?:预测|预计|预估|估算)\s*",
+        "",
+        prefix,
+        flags=re.IGNORECASE,
+    )
+    prefix = re.sub(
+        r"^(?:please\s+)?(?:predict|forecast|estimate)\s+",
+        "",
+        prefix,
+        flags=re.IGNORECASE,
+    )
+    person = re.sub(
+        r"(?:的)?\s*(?:完成|做|负责|对于|对)\s*$",
+        "",
+        prefix,
+        flags=re.IGNORECASE,
+    )
+    person = re.sub(
+        r"(?:'s|’s)?\s*(?:total\s+)?(?:effort|hours?|time)?\s*(?:for|on)\s*$",
+        "",
+        person,
+        flags=re.IGNORECASE,
+    ).strip(" ,，:：'\"")
+    if not person:
+        return None
+    date_match = ISO_DATE_PATTERN.search(question)
+    return {
+        "person": person,
+        "did": did_match.group(0),
+        "as_of_date": date_match.group(0) if date_match else None,
+    }
+
+
+def extract_effort_prediction_parameters(
+    question: str, history: list[dict[str, str]] | None = None
+) -> tuple[dict[str, str | None], dict[str, int]]:
+    local_parameters = _extract_effort_parameters_locally(question)
+    if local_parameters:
+        return local_parameters, empty_usage()
+
+    history_text = ""
+    if history:
+        history_text = "\n".join(
+            f"{message['role']}: {message['content']}" for message in history[-6:]
+        )
+    system = """Extract parameters for a DID effort prediction request.
+Return exactly one JSON object with these keys:
+{"person": string|null, "did": string|null, "as_of_date": "YYYY-MM-DD"|null}
+Rules:
+1. Copy the person name or nickname exactly as the user supplied it.
+2. Copy the DID exactly as supplied.
+3. Do not invent missing values.
+4. Use conversation history only to resolve an explicitly referenced prior person or DID.
+5. Do not add markdown or explanation."""
+    user = f"""Conversation history:
+{history_text or '(none)'}
+
+Current request:
+{question}"""
+    raw, usage = _chat(system, user, temperature=0)
+    payload = _extract_json_object(raw)
+    person = payload.get("person")
+    did = payload.get("did")
+    as_of_date = payload.get("as_of_date")
+    if not isinstance(person, str) or not person.strip():
+        raise ValueError("The prediction request is missing a person name.")
+    if not isinstance(did, str) or not did.strip():
+        raise ValueError("The prediction request is missing a DID.")
+    if as_of_date is not None and not isinstance(as_of_date, str):
+        raise ValueError("as_of_date must be YYYY-MM-DD or null.")
+    return {
+        "person": person.strip(),
+        "did": did.strip(),
+        "as_of_date": as_of_date,
+    }, usage
+
+
+def _format_effort_prediction(
+    prediction: dict[str, Any], question: str
+) -> str:
+    chinese = bool(re.search(r"[\u4e00-\u9fff]", question))
+    similar = prediction.get("similar_historical_dids") or []
+    warnings = prediction.get("warnings") or []
+    if chinese:
+        lines = [
+            (
+                f"预计 **{prediction['person']}** 完成 **{prediction['did']}** 的总工时："
+                f"**P50 {prediction['p50_hours']} 小时**、"
+                f"**P80 {prediction['p80_hours']} 小时**、"
+                f"**P90 {prediction['p90_hours']} 小时**。"
+            ),
+            "",
+            "日常资源规划建议参考 P80；P90 适合更保守的高风险规划。",
+            f"该人员在预测日期前有 {prediction['person_completed_did_count']} 个可用历史 DID。",
+        ]
+        if similar:
+            lines.extend(["", "最相似的历史案例："])
+            lines.extend(
+                (
+                    f"- {item['did']}：实际 {item['actual_hours']} 小时，"
+                    f"总体相似度 {item['overall_similarity']:.1%}"
+                )
+                for item in similar[:3]
+            )
+        if warnings:
+            lines.extend(["", "注意：", *[f"- {warning}" for warning in warnings]])
+        lines.extend(["", f"模型版本：`{prediction['model_version']}`"])
+        return "\n".join(lines)
+
+    lines = [
+        (
+            f"Estimated total effort for **{prediction['person']}** on "
+            f"**{prediction['did']}**: **P50 {prediction['p50_hours']} hours**, "
+            f"**P80 {prediction['p80_hours']} hours**, and "
+            f"**P90 {prediction['p90_hours']} hours**."
+        ),
+        "",
+        "Use P80 for routine capacity planning and P90 for more conservative, high-risk planning.",
+        (
+            f"The person has {prediction['person_completed_did_count']} eligible "
+            "historical DIDs before the prediction date."
+        ),
+    ]
+    if similar:
+        lines.extend(["", "Most similar historical cases:"])
+        lines.extend(
+            (
+                f"- {item['did']}: {item['actual_hours']} actual hours, "
+                f"{item['overall_similarity']:.1%} overall similarity"
+            )
+            for item in similar[:3]
+        )
+    if warnings:
+        lines.extend(["", "Warnings:", *[f"- {warning}" for warning in warnings]])
+    lines.extend(["", f"Model version: `{prediction['model_version']}`"])
+    return "\n".join(lines)
+
+
+def answer_effort_prediction(
+    question: str, history: list[dict[str, str]] | None = None
+) -> dict[str, Any]:
+    parameters, usage = extract_effort_prediction_parameters(question, history)
+    prediction = predict_effort(
+        person=str(parameters["person"]),
+        did=str(parameters["did"]),
+        as_of_date=parameters["as_of_date"],
+    )
+    return {
+        "answer": _format_effort_prediction(prediction, question),
+        "cypher": "",
+        "rows": [prediction],
+        "schema": None,
+        "error": None,
+        "usage": usage,
+        "prediction": prediction,
+    }
 
 
 @lru_cache(maxsize=64)
@@ -242,6 +448,22 @@ def _needs_repair(question: str, rows: list[dict[str, Any]], cypher: str) -> boo
 
 def ask(question: str, history: list[dict[str, str]] | None = None, schema: dict[str, Any] | None = None) -> dict[str, Any]:
     load_env()
+    if _is_effort_prediction_question(question):
+        try:
+            result = answer_effort_prediction(question, history)
+            result["schema"] = schema
+            return result
+        except Exception as exc:  # noqa: BLE001
+            error = str(exc)
+            return {
+                "answer": f"Effort prediction failed: {error}",
+                "cypher": "",
+                "rows": [],
+                "schema": schema,
+                "error": error,
+                "usage": empty_usage(),
+            }
+
     schema = schema or get_schema()
     last_error = None
     cypher = ""
