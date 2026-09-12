@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import re
+import sys
 from datetime import date, datetime
 from functools import lru_cache
 from pathlib import Path
@@ -15,6 +17,7 @@ from typing import Any, Iterable
 import joblib
 import numpy as np
 from sklearn.compose import ColumnTransformer
+from sklearn.feature_extraction.text import HashingVectorizer
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import Ridge
 from sklearn.metrics import mean_absolute_error, mean_squared_error
@@ -23,9 +26,29 @@ from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 from neo4j_client import get_driver, load_env
 
-MODEL_VERSION = "did-effort-ridge-v1"
+MODEL_VERSION = "did-effort-ridge-v2-fast"
 DEFAULT_MODEL_PATH = (
     Path(__file__).resolve().parent / "artifacts" / "did_effort_model.joblib"
+)
+DEFAULT_SIMILARITY_CACHE_PATH = (
+    Path(__file__).resolve().parent
+    / "artifacts"
+    / "did_effort_similarity_cache.joblib"
+)
+TLF_SEMANTIC_MATCH_THRESHOLD = 0.70
+SIMILARITY_CACHE_VERSION = "tlf-char-wb-3-5-greedy-0.70-v1"
+RECENT_CANDIDATE_LIMIT = 50
+SAME_STUDY_CANDIDATE_LIMIT = 100
+EXACT_OVERLAP_CANDIDATE_LIMIT = 100
+SAME_TA_CANDIDATE_LIMIT = 25
+PROGRESS_INTERVAL = 500
+CACHE_CHECKPOINT_INTERVAL = 2000
+TITLE_VECTORIZER = HashingVectorizer(
+    analyzer="char_wb",
+    ngram_range=(3, 5),
+    n_features=2**16,
+    alternate_sign=False,
+    norm="l2",
 )
 
 TASK_FIELDS = (
@@ -56,9 +79,20 @@ NUMERIC_FEATURES = [
     "adam_prior_overlap_count",
     "sdtm_prior_overlap_count",
     "max_tlf_similarity",
+    "max_tlf_semantic_similarity",
+    "max_tlf_semantic_coverage",
     "max_adam_similarity",
     "max_sdtm_similarity",
     "max_overall_similarity",
+    "max_combined_similarity",
+    "top3_combined_similarity_mean",
+    "top5_combined_similarity_mean",
+    "similar_did_count_ge_70",
+    "similar_did_count_ge_85",
+    "weighted_similar_hours",
+    "weighted_similar_hours_per_task",
+    "latest_similar_hours",
+    "similar_hours_trend",
     "days_since_similar_work",
 ]
 
@@ -389,23 +423,168 @@ def _assignment_matches(value: Any, person: str) -> bool:
     return _normalized_name(value) == _normalized_name(person)
 
 
-def _item_set(record: dict[str, Any], kind: str) -> set[str]:
+def _person_items(record: dict[str, Any], kind: str) -> list[dict[str, Any]]:
     person = str(record.get("person") or "")
-    items = record.get(kind) or []
-    assigned = {
-        _normalized_name(item.get("name"))
+    items = [item for item in (record.get(kind) or []) if item.get("name")]
+    assigned = [
+        item
         for item in items
         if _assignment_matches(item.get("generation"), person)
         or _assignment_matches(item.get("qc"), person)
+    ]
+    return assigned or items
+
+
+def _item_set(record: dict[str, Any], kind: str) -> set[str]:
+    return {
+        _normalized_name(item.get("name"))
+        for item in _person_items(record, kind)
     }
-    if assigned:
-        return assigned
-    return {_normalized_name(item.get("name")) for item in items if item.get("name")}
 
 
 def _jaccard(left: set[str], right: set[str]) -> float:
     union = left | right
     return len(left & right) / len(union) if union else 0.0
+
+
+def _normalized_title(value: Any) -> str:
+    text = re.sub(r"[_/\\|]+", " ", str(value or "").lower())
+    text = re.sub(r"[^a-z0-9]+", " ", text)
+    return " ".join(text.split())
+
+
+@lru_cache(maxsize=50000)
+def _title_vector(title: str) -> Any:
+    return TITLE_VECTORIZER.transform([title])
+
+
+def _title_similarity(left: Any, right: Any) -> float:
+    left_title = _normalized_title(left)
+    right_title = _normalized_title(right)
+    if not left_title or not right_title:
+        return 0.0
+    if left_title == right_title:
+        return 1.0
+    return float(_title_vector(left_title).multiply(_title_vector(right_title)).sum())
+
+
+def _metadata_equal(left: Any, right: Any) -> bool:
+    return bool(left and right and _normalized_name(left) == _normalized_name(right))
+
+
+def _tlf_item_similarity(
+    left: dict[str, Any], right: dict[str, Any]
+) -> float:
+    weighted_score = 0.8 * _title_similarity(left.get("name"), right.get("name"))
+    available_weight = 0.8
+    for field in ("type", "source"):
+        if left.get(field) and right.get(field):
+            available_weight += 0.1
+            if _metadata_equal(left.get(field), right.get(field)):
+                weighted_score += 0.1
+    return weighted_score / available_weight
+
+
+def _tlf_semantic_similarity(
+    left_items: list[dict[str, Any]],
+    right_items: list[dict[str, Any]],
+) -> tuple[float, float]:
+    """Return one-to-one title similarity and target-title coverage."""
+    if not left_items or not right_items:
+        return 0.0, 0.0
+
+    candidates = sorted(
+        (
+            (_tlf_item_similarity(left, right), left_index, right_index)
+            for left_index, left in enumerate(left_items)
+            for right_index, right in enumerate(right_items)
+        ),
+        reverse=True,
+    )
+    used_left: set[int] = set()
+    used_right: set[int] = set()
+    matched_scores = []
+    for score, left_index, right_index in candidates:
+        if score < TLF_SEMANTIC_MATCH_THRESHOLD:
+            break
+        if left_index in used_left or right_index in used_right:
+            continue
+        used_left.add(left_index)
+        used_right.add(right_index)
+        matched_scores.append(score)
+
+    score = sum(matched_scores) / max(len(left_items), len(right_items))
+    coverage = len(used_left) / len(left_items)
+    return float(score), float(coverage)
+
+
+def _tlf_items_hash(items: list[dict[str, Any]]) -> str:
+    signature = sorted(
+        (
+            _normalized_title(item.get("name")),
+            _normalized_name(item.get("type")),
+            _normalized_name(item.get("source")),
+        )
+        for item in items
+        if item.get("name")
+    )
+    serialized = json.dumps(signature, ensure_ascii=True, separators=(",", ":"))
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def _new_similarity_cache() -> dict[str, Any]:
+    return {
+        "version": SIMILARITY_CACHE_VERSION,
+        "entries": {},
+        "hits": 0,
+        "misses": 0,
+        "candidate_pairs": 0,
+        "skipped_history_pairs": 0,
+    }
+
+
+def _load_similarity_cache(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return _new_similarity_cache()
+    payload = joblib.load(path)
+    if not isinstance(payload, dict) or not isinstance(payload.get("entries"), dict):
+        raise ValueError(f"Invalid similarity cache format: {path.resolve()}")
+    if payload.get("version") != SIMILARITY_CACHE_VERSION:
+        return _new_similarity_cache()
+    cache = _new_similarity_cache()
+    cache["entries"] = payload["entries"]
+    return cache
+
+
+def _save_similarity_cache(cache: dict[str, Any], path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = path.with_suffix(path.suffix + ".tmp")
+    joblib.dump(
+        {
+            "version": SIMILARITY_CACHE_VERSION,
+            "entries": cache["entries"],
+        },
+        temporary_path,
+    )
+    temporary_path.replace(path)
+
+
+def _cached_tlf_semantic_similarity(
+    left_items: list[dict[str, Any]],
+    right_items: list[dict[str, Any]],
+    cache: dict[str, Any] | None,
+) -> tuple[float, float]:
+    if cache is None:
+        return _tlf_semantic_similarity(left_items, right_items)
+    key = f"{_tlf_items_hash(left_items)}:{_tlf_items_hash(right_items)}"
+    cached = cache["entries"].get(key)
+    if cached is not None:
+        cache["hits"] += 1
+        return float(cached[0]), float(cached[1])
+    result = _tlf_semantic_similarity(left_items, right_items)
+    cache["entries"][key] = result
+    cache["misses"] += 1
+    return result
 
 
 def _as_date(value: Any) -> date:
@@ -417,8 +596,123 @@ def _safe_median(values: Iterable[float]) -> float:
     return float(median(values)) if values else 0.0
 
 
+def _safe_mean(values: Iterable[float]) -> float:
+    values = list(values)
+    return float(sum(values) / len(values)) if values else 0.0
+
+
+def _record_key(record: dict[str, Any]) -> tuple[str, str, str]:
+    return (
+        str(record.get("person") or ""),
+        str(record.get("did") or ""),
+        str(record.get("completion_date") or ""),
+    )
+
+
+def _similarity_candidates(
+    target: dict[str, Any], person_history: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Keep high-value and recent history before expensive TLF title matching."""
+    newest_first = sorted(
+        person_history,
+        key=lambda row: (_as_date(row["completion_date"]), str(row.get("did") or "")),
+        reverse=True,
+    )
+    selected: dict[tuple[str, str, str], dict[str, Any]] = {}
+
+    def add(rows: Iterable[dict[str, Any]], limit: int) -> None:
+        for row in list(rows)[:limit]:
+            selected[_record_key(row)] = row
+
+    add(newest_first, RECENT_CANDIDATE_LIMIT)
+
+    target_study = _normalized_name(target.get("study"))
+    if target_study:
+        add(
+            (
+                row
+                for row in newest_first
+                if _normalized_name(row.get("study")) == target_study
+            ),
+            SAME_STUDY_CANDIDATE_LIMIT,
+        )
+
+    target_ta = _normalized_name(target.get("ta"))
+    if target_ta:
+        add(
+            (
+                row
+                for row in newest_first
+                if _normalized_name(row.get("ta")) == target_ta
+            ),
+            SAME_TA_CANDIDATE_LIMIT,
+        )
+
+    target_sets = {
+        kind: _item_set(target, kind) for kind in ("tlfs", "adams", "sdtms")
+    }
+    add(
+        (
+            row
+            for row in newest_first
+            if any(
+                target_sets[kind] & _item_set(row, kind)
+                for kind in ("tlfs", "adams", "sdtms")
+            )
+        ),
+        EXACT_OVERLAP_CANDIDATE_LIMIT,
+    )
+    return sorted(
+        selected.values(),
+        key=lambda row: (_as_date(row["completion_date"]), str(row.get("did") or "")),
+    )
+
+
+def _weighted_mean(
+    similarities: list[dict[str, Any]], value_getter: Any
+) -> float:
+    weighted = [
+        (item["combined_similarity"], value_getter(item))
+        for item in similarities
+        if item["combined_similarity"] >= TLF_SEMANTIC_MATCH_THRESHOLD
+    ]
+    valid = [(weight, value) for weight, value in weighted if value is not None]
+    total_weight = sum(weight for weight, _ in valid)
+    return (
+        float(sum(weight * float(value) for weight, value in valid) / total_weight)
+        if total_weight
+        else 0.0
+    )
+
+
+def _similar_hours_trend(similarities: list[dict[str, Any]]) -> float:
+    repeated = sorted(
+        (
+            item
+            for item in similarities
+            if item["combined_similarity"] >= TLF_SEMANTIC_MATCH_THRESHOLD
+        ),
+        key=lambda item: (_as_date(item["completion_date"]), str(item.get("did") or "")),
+    )
+    if len(repeated) < 2:
+        return 0.0
+    hours = [_number(item["actual_hours"]) for item in repeated]
+    x_mean = (len(hours) - 1) / 2
+    y_mean = sum(hours) / len(hours)
+    denominator = sum((index - x_mean) ** 2 for index in range(len(hours)))
+    return float(
+        sum(
+            (index - x_mean) * (value - y_mean)
+            for index, value in enumerate(hours)
+        )
+        / denominator
+    )
+
+
 def build_feature_row(
-    target: dict[str, Any], history: list[dict[str, Any]]
+    target: dict[str, Any],
+    history: list[dict[str, Any]],
+    similarity_cache: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Build time-safe features and return the most similar personal history."""
     target_date_value = target.get("completion_date") or target.get("as_of_date")
@@ -433,6 +727,12 @@ def build_feature_row(
         for row in eligible
         if _normalized_name(row.get("person")) == _normalized_name(target.get("person"))
     ]
+    candidate_history = _similarity_candidates(target, person_history)
+    if similarity_cache is not None:
+        similarity_cache["candidate_pairs"] += len(candidate_history)
+        similarity_cache["skipped_history_pairs"] += (
+            len(person_history) - len(candidate_history)
+        )
 
     global_hours = [_number(row["actual_hours"]) for row in eligible]
     global_rates = [
@@ -448,6 +748,7 @@ def build_feature_row(
     ]
 
     target_sets = {kind: _item_set(target, kind) for kind in ("tlfs", "adams", "sdtms")}
+    target_tlf_items = _person_items(target, "tlfs")
     historical_union = {
         kind: set().union(*(_item_set(row, kind) for row in person_history))
         if person_history
@@ -456,7 +757,12 @@ def build_feature_row(
     }
 
     similarities = []
-    for row in person_history:
+    for row in candidate_history:
+        semantic_tlf_similarity, semantic_tlf_coverage = _cached_tlf_semantic_similarity(
+            target_tlf_items,
+            _person_items(row, "tlfs"),
+            similarity_cache,
+        )
         scores = {
             kind: _jaccard(target_sets[kind], _item_set(row, kind))
             for kind in ("tlfs", "adams", "sdtms")
@@ -472,7 +778,10 @@ def build_feature_row(
                 "study": row.get("study"),
                 "completion_date": row.get("completion_date"),
                 "actual_hours": row.get("actual_hours"),
+                "task_count": row.get("task_count"),
                 "tlf_similarity": scores["tlfs"],
+                "tlf_semantic_similarity": semantic_tlf_similarity,
+                "tlf_semantic_coverage": semantic_tlf_coverage,
                 "adam_similarity": scores["adams"],
                 "sdtm_similarity": scores["sdtms"],
                 "overall_similarity": (
@@ -482,8 +791,22 @@ def build_feature_row(
                 ),
             }
         )
-    similarities.sort(key=lambda item: item["overall_similarity"], reverse=True)
+        similarities[-1]["combined_similarity"] = (
+            similarities[-1]["overall_similarity"]
+            + similarities[-1]["tlf_semantic_similarity"]
+        ) / 2
+    similarities.sort(key=lambda item: item["combined_similarity"], reverse=True)
     best = similarities[0] if similarities else None
+    repeated_similarities = [
+        item
+        for item in similarities
+        if item["combined_similarity"] >= TLF_SEMANTIC_MATCH_THRESHOLD
+    ]
+    latest_similar = max(
+        repeated_similarities,
+        key=lambda item: (_as_date(item["completion_date"]), str(item.get("did") or "")),
+        default=None,
+    )
 
     feature = {field: _number(target.get(field)) for field in TASK_FIELDS}
     feature.update(
@@ -507,16 +830,58 @@ def build_feature_row(
             "max_tlf_similarity": max(
                 (item["tlf_similarity"] for item in similarities), default=0.0
             ),
+            "max_tlf_semantic_similarity": max(
+                (item["tlf_semantic_similarity"] for item in similarities),
+                default=0.0,
+            ),
+            "max_tlf_semantic_coverage": max(
+                (item["tlf_semantic_coverage"] for item in similarities),
+                default=0.0,
+            ),
             "max_adam_similarity": max(
                 (item["adam_similarity"] for item in similarities), default=0.0
             ),
             "max_sdtm_similarity": max(
                 (item["sdtm_similarity"] for item in similarities), default=0.0
             ),
-            "max_overall_similarity": best["overall_similarity"] if best else 0.0,
+            "max_overall_similarity": max(
+                (item["overall_similarity"] for item in similarities),
+                default=0.0,
+            ),
+            "max_combined_similarity": (
+                best["combined_similarity"] if best else 0.0
+            ),
+            "top3_combined_similarity_mean": _safe_mean(
+                item["combined_similarity"] for item in similarities[:3]
+            ),
+            "top5_combined_similarity_mean": _safe_mean(
+                item["combined_similarity"] for item in similarities[:5]
+            ),
+            "similar_did_count_ge_70": float(len(repeated_similarities)),
+            "similar_did_count_ge_85": float(
+                sum(
+                    item["combined_similarity"] >= 0.85
+                    for item in similarities
+                )
+            ),
+            "weighted_similar_hours": _weighted_mean(
+                similarities, lambda item: _number(item["actual_hours"])
+            ),
+            "weighted_similar_hours_per_task": _weighted_mean(
+                similarities,
+                lambda item: (
+                    _number(item["actual_hours"]) / _number(item["task_count"])
+                    if _number(item.get("task_count")) > 0
+                    else None
+                ),
+            ),
+            "latest_similar_hours": (
+                _number(latest_similar["actual_hours"]) if latest_similar else 0.0
+            ),
+            "similar_hours_trend": _similar_hours_trend(similarities),
             "days_since_similar_work": float(
                 (target_date - _as_date(best["completion_date"])).days
-                if best and best["overall_similarity"] > 0
+                if best and best["combined_similarity"] > 0
                 else 3650
             ),
             "ta": str(target.get("ta") or "UNKNOWN"),
@@ -529,15 +894,36 @@ def build_feature_row(
 
 
 def build_training_features(
-    records: list[dict[str, Any]]
+    records: list[dict[str, Any]],
+    similarity_cache: dict[str, Any] | None = None,
+    similarity_cache_path: Path | None = None,
+    show_progress: bool = False,
 ) -> tuple[list[dict[str, Any]], np.ndarray]:
     ordered = sorted(records, key=lambda row: (row["completion_date"], str(row["did"])))
     features = []
     labels = []
-    for row in ordered:
-        feature, _ = build_feature_row(row, ordered)
+    total = len(ordered)
+    for index, row in enumerate(ordered, start=1):
+        feature, _ = build_feature_row(row, ordered, similarity_cache)
         features.append(feature)
         labels.append(_number(row["actual_hours"]))
+        if show_progress and (index % PROGRESS_INTERVAL == 0 or index == total):
+            stats = similarity_cache or _new_similarity_cache()
+            print(
+                "Feature progress: "
+                f"{index}/{total} records; "
+                f"cache hits={stats['hits']}, misses={stats['misses']}; "
+                f"candidate pairs={stats['candidate_pairs']}, "
+                f"skipped={stats['skipped_history_pairs']}",
+                file=sys.stderr,
+                flush=True,
+            )
+        if (
+            similarity_cache is not None
+            and similarity_cache_path is not None
+            and index % CACHE_CHECKPOINT_INTERVAL == 0
+        ):
+            _save_similarity_cache(similarity_cache, similarity_cache_path)
     return features, np.asarray(labels, dtype=float)
 
 
@@ -617,7 +1003,11 @@ def _metrics(actual: np.ndarray, predicted: np.ndarray) -> dict[str, float]:
 
 
 def train_model(
-    records: list[dict[str, Any]], model_path: Path, minimum_records: int = 20
+    records: list[dict[str, Any]],
+    model_path: Path,
+    minimum_records: int = 20,
+    similarity_cache_path: Path | None = None,
+    show_progress: bool = False,
 ) -> dict[str, Any]:
     """Train, time-test, calibrate upper prediction bounds, and persist the model."""
     cleaned = sorted(
@@ -628,7 +1018,19 @@ def train_model(
         raise ValueError(
             f"Only {len(cleaned)} eligible records; at least {minimum_records} are required."
         )
-    features, labels = build_training_features(cleaned)
+    similarity_cache = (
+        _load_similarity_cache(similarity_cache_path)
+        if similarity_cache_path is not None
+        else None
+    )
+    features, labels = build_training_features(
+        cleaned,
+        similarity_cache=similarity_cache,
+        similarity_cache_path=similarity_cache_path,
+        show_progress=show_progress,
+    )
+    if similarity_cache is not None and similarity_cache_path is not None:
+        _save_similarity_cache(similarity_cache, similarity_cache_path)
     train_dids, calibration_dids, test_dids = _grouped_time_split(cleaned)
     train_idx = [i for i, row in enumerate(cleaned) if str(row["did"]) in train_dids]
     calibration_idx = [
@@ -686,6 +1088,18 @@ def train_model(
         "metrics": metrics,
         "upper_adjustments": upper_adjustments,
         "split": artifact["split"],
+        "similarity_cache": (
+            {
+                "path": str(similarity_cache_path.resolve()),
+                "entries": len(similarity_cache["entries"]),
+                "hits": similarity_cache["hits"],
+                "misses": similarity_cache["misses"],
+                "candidate_pairs": similarity_cache["candidate_pairs"],
+                "skipped_history_pairs": similarity_cache["skipped_history_pairs"],
+            }
+            if similarity_cache is not None and similarity_cache_path is not None
+            else None
+        ),
     }
 
 
@@ -701,6 +1115,14 @@ def predict_record(
     artifact = _load_model_artifact(
         str(resolved_model_path), resolved_model_path.stat().st_mtime_ns
     )
+    if (
+        artifact.get("numeric_features") != NUMERIC_FEATURES
+        or artifact.get("categorical_features") != CATEGORICAL_FEATURES
+    ):
+        raise ValueError(
+            "The saved effort model uses an older feature schema. "
+            "Retrain it with the current effort_prediction.py."
+        )
     target = _normalize_record(target)
     target["as_of_date"] = as_of_date or date.today().isoformat()
     history = [
@@ -728,6 +1150,19 @@ def predict_record(
         "p90_hours": round(p50 + adjustments["p90"], 1),
         "model_version": artifact["model_version"],
         "person_completed_did_count": int(feature["person_completed_count"]),
+        "similarity_features": {
+            name: feature[name]
+            for name in (
+                "top3_combined_similarity_mean",
+                "top5_combined_similarity_mean",
+                "similar_did_count_ge_70",
+                "similar_did_count_ge_85",
+                "weighted_similar_hours",
+                "weighted_similar_hours_per_task",
+                "latest_similar_hours",
+                "similar_hours_trend",
+            )
+        },
         "similar_historical_dids": similar,
         "warnings": warnings,
     }
@@ -769,6 +1204,9 @@ def main() -> None:
     train_parser = subparsers.add_parser("train", help="Train and save the effort model.")
     train_parser.add_argument("--input", type=Path, help="Extract JSON; omit to query Neo4j.")
     train_parser.add_argument("--model", type=Path, default=DEFAULT_MODEL_PATH)
+    train_parser.add_argument(
+        "--cache", type=Path, default=DEFAULT_SIMILARITY_CACHE_PATH
+    )
     train_parser.add_argument("--minimum-records", type=int, default=20)
 
     predict_parser = subparsers.add_parser(
@@ -795,7 +1233,15 @@ def main() -> None:
         _print_json({"output": str(args.output.resolve()), "quality": payload["quality"]})
     elif args.command == "train":
         records = _load_json_records(args.input) if args.input else load_training_records()
-        _print_json(train_model(records, args.model, args.minimum_records))
+        _print_json(
+            train_model(
+                records,
+                args.model,
+                args.minimum_records,
+                similarity_cache_path=args.cache,
+                show_progress=True,
+            )
+        )
     else:
         _print_json(
             predict_effort(args.person, args.did, args.model, args.as_of_date)

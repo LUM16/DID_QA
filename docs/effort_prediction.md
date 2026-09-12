@@ -368,7 +368,7 @@ Table 14.1-1
 TABLE_14_1_1
 ```
 
-都会得到接近的标准形式。但名称标准化不能识别语义相同、名称完全不同的任务；以后可增加受治理的标准 ID 或 embedding。
+都会得到接近的标准形式。精确集合匹配仍保留，作为可解释的基准特征。
 
 ### 6.5 Jaccard 相似度
 
@@ -403,7 +403,73 @@ max_overall_similarity
 
 也就是此人与历史 DID 的最大相似度。
 
-### 6.6 历史重合和时间间隔
+### 6.6 TLF 标题语义近似
+
+模型 v2 在精确 Jaccard 之外增加本地标题近似，不调用 LLM 或外部 API：
+
+```text
+标题标准化
+→ 字符 3–5 gram 哈希向量
+→ Cosine similarity
+→ 结合 Type 和 Source
+→ 相似度至少 0.70 的一对一贪心匹配
+```
+
+单个 TLF 对的分数以标题为主：
+
+```text
+80% 标题字符 n-gram 相似度
+10% Type 匹配
+10% Source 匹配
+```
+
+当 Type 或 Source 缺失时，仅在可用字段上重新归一化。一个历史 TLF 最多只能匹配
+一个目标 TLF，避免同一项目被重复计算。DID 级分数用匹配得分总和除以两侧较大的
+TLF 数量，因此未匹配的任务会降低总体分数。
+
+新增特征：
+
+```text
+max_tlf_semantic_similarity
+max_tlf_semantic_coverage
+max_combined_similarity
+top3_combined_similarity_mean
+top5_combined_similarity_mean
+similar_did_count_ge_70
+similar_did_count_ge_85
+weighted_similar_hours
+weighted_similar_hours_per_task
+latest_similar_hours
+similar_hours_trend
+```
+
+预测结果中的历史案例同时展示精确 TLF 相似度和标题近似度。这属于可解释的词面语义
+近似，并不等同于语言模型 embedding；名称完全不同的真正同义标题仍可能漏匹配。
+
+其中重复相似工作特征的含义是：
+
+- `top3_combined_similarity_mean`、`top5_combined_similarity_mean`：最相似 3/5 个候选 DID 的平均综合相似度；
+- `similar_did_count_ge_70`、`similar_did_count_ge_85`：综合相似度分别达到 0.70/0.85 的历史 DID 数；
+- `weighted_similar_hours`：以综合相似度为权重，对相似度至少 0.70 的历史实际工时求加权平均；
+- `weighted_similar_hours_per_task`：同一批历史 DID 的每任务工时加权平均；
+- `latest_similar_hours`：最近一个相似度至少 0.70 的历史 DID 实际工时；
+- `similar_hours_trend`：按完成时间排列相似历史 DID 后，每多一次相似经历对应的实际工时线性斜率。负值表示历史上逐次减少，正值表示逐次增加；少于两个相似 DID 时为 0。
+
+### 6.7 v2-fast 候选筛选和持久缓存
+
+昂贵的 TLF 标题逐项匹配不再遍历某人的全部历史，而是比较以下候选的并集：
+
+- 最近 50 个历史 DID；
+- 最近 100 个同 Study DID；
+- 最近 100 个存在精确 TLF/ADaM/SDTM 重合的 DID；
+- 最近 25 个同 TA DID。
+
+限制只作用于昂贵的 DID 间相似度和上述重复相似工作特征。个人中位工时、历史数量以及历史任务并集仍使用预测日期之前的全部合格个人历史。
+
+TLF 语义匹配结果按目标/历史 TLF 清单的内容哈希保存到
+`artifacts/did_effort_similarity_cache.joblib`。缓存包含算法版本；匹配算法或阈值升级后，旧缓存会自动失效。训练期间每 2,000 条记录检查点保存一次，因此中断后也可以复用大部分已完成计算。控制台每 500 条记录报告进度、cache hit/miss、候选比较数和跳过数。
+
+### 6.8 历史重合和时间间隔
 
 模型还使用：
 
@@ -649,14 +715,16 @@ coverage = 实际工时小于等于预测上界的测试样本比例
 ```powershell
 py .\effort_prediction.py train `
   --input .\data\did_effort_training.json `
-  --model .\artifacts\did_effort_model.joblib
+  --model .\artifacts\did_effort_model.joblib `
+  --cache .\artifacts\did_effort_similarity_cache.joblib
 ```
 
 如果省略 `--input`，程序会直接从 Neo4j 读取训练记录：
 
 ```powershell
 py .\effort_prediction.py train `
-  --model .\artifacts\did_effort_model.joblib
+  --model .\artifacts\did_effort_model.joblib `
+  --cache .\artifacts\did_effort_similarity_cache.joblib
 ```
 
 建议生产中保留 `extract → 人工检查 → train` 两阶段流程。
@@ -859,7 +927,8 @@ py .\effort_prediction.py extract `
 ```powershell
 py .\effort_prediction.py train `
   --input .\data\did_effort_training.json `
-  --model .\artifacts\did_effort_model.joblib
+  --model .\artifacts\did_effort_model.joblib `
+  --cache .\artifacts\did_effort_similarity_cache.joblib
 ```
 
 ### 步骤五：检查指标
@@ -888,7 +957,7 @@ py .\effort_prediction.py train `
 1. `TIME_ON` 没有拆分 Generation 和 QC 时，只能预测合并工时。
 2. 月度工时可能无法精确切分到任务完成日。
 3. 没有 scope snapshot 时，严格历史回测存在限制。
-4. 相似度依赖任务名称标准化，不能完全理解语义。
+4. TLF 标题近似使用字符 n-gram，不是 embedding，不能完全理解深层语义。
 5. 当前 P80/P90 使用全局残差调整，区间宽度不会随样本不确定性变化。
 6. 当前模型使用 Person-DID 汇总标签，无法判断具体哪个 TLF 消耗多少工时。
 7. 个人历史特征在同一天不共享记录，这是保守的防泄漏策略。

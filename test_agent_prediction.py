@@ -23,6 +23,7 @@ PREDICTION = {
             "did": "C5001001_19",
             "actual_hours": 14.4,
             "overall_similarity": 1.0,
+            "tlf_semantic_similarity": 1.0,
         }
     ],
     "warnings": [],

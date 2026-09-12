@@ -50,12 +50,24 @@ Review the printed data-quality report before training. Train with a grouped
 time split (70% train, 15% interval calibration, 15% test):
 
 ```cmd
-py effort_prediction.py train --input data\did_effort_training.json --model artifacts\did_effort_model.joblib
+py effort_prediction.py train --input data\did_effort_training.json --model artifacts\did_effort_model.joblib --cache artifacts\did_effort_similarity_cache.joblib
 ```
 
 The training command reports MAE, median absolute error, RMSE, WAPE, bias, and
 P80/P90 coverage. It saves the fitted preprocessing pipeline, model, interval
 adjustments, and eligible history in one versioned artifact.
+
+Model v2-fast keeps exact TLF-name Jaccard features and local character 3–5
+gram title similarity with Type/Source weighting and one-to-one matching. It
+reduces expensive comparisons to relevant/recent historical candidates and
+persists semantic pair results in the `--cache` file. Later retraining runs
+reuse unchanged pairs. Training progress and cache hit/miss counts are written
+to the console.
+
+The model also learns from repeated similar work through top-3/top-5 similarity,
+similar-DID counts, similarity-weighted hours and hours-per-task, latest similar
+hours, and the historical similar-hours trend. After updating from v1 or v2,
+retrain the model; the existing extracted JSON can be reused.
 
 Predict a planned or ongoing assignment:
 

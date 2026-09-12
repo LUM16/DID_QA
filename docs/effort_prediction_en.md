@@ -364,7 +364,8 @@ Table 14.1-1
 TABLE_14_1_1
 ```
 
-Both produce similar normalized forms. Name normalization cannot identify semantically equivalent tasks with completely different names; governed standard IDs or embeddings could be added in the future.
+Both produce similar normalized forms. Exact set matching remains as an
+interpretable baseline feature.
 
 ### 6.5 Jaccard Similarity
 
@@ -399,7 +400,76 @@ max_overall_similarity
 
 They represent this person's maximum similarity to historical DIDs.
 
-### 6.6 Historical Overlap and Time Interval
+### 6.6 TLF Title Semantic Approximation
+
+Model v2 adds local title approximation alongside exact Jaccard matching. It
+does not call an LLM or external API:
+
+```text
+Normalize titles
+→ Character 3–5 gram hashing vectors
+→ Cosine similarity
+→ Combine Type and Source
+→ Greedy one-to-one matching at a minimum score of 0.70
+```
+
+Each TLF-pair score is primarily title-based:
+
+```text
+80% title character n-gram similarity
+10% Type match
+10% Source match
+```
+
+When Type or Source is missing, the score is renormalized over available
+fields. A historical TLF can match at most one target TLF, preventing duplicate
+credit. The DID-level score divides the sum of matched scores by the larger TLF
+count, so unmatched tasks reduce the score.
+
+New features:
+
+```text
+max_tlf_semantic_similarity
+max_tlf_semantic_coverage
+max_combined_similarity
+top3_combined_similarity_mean
+top5_combined_similarity_mean
+similar_did_count_ge_70
+similar_did_count_ge_85
+weighted_similar_hours
+weighted_similar_hours_per_task
+latest_similar_hours
+similar_hours_trend
+```
+
+Historical cases in prediction output include both exact TLF similarity and
+title similarity. This is an interpretable lexical-semantic approximation, not
+a language-model embedding; truly synonymous titles with entirely different
+wording may still be missed.
+
+The repeated-similar-work features mean:
+
+- `top3_combined_similarity_mean` and `top5_combined_similarity_mean`: mean combined similarity of the top 3/5 candidate DIDs;
+- `similar_did_count_ge_70` and `similar_did_count_ge_85`: counts of historical DIDs with combined similarity at least 0.70/0.85;
+- `weighted_similar_hours`: similarity-weighted mean actual hours among historical DIDs with similarity at least 0.70;
+- `weighted_similar_hours_per_task`: weighted mean hours per task for the same history;
+- `latest_similar_hours`: actual hours of the most recently completed DID with similarity at least 0.70;
+- `similar_hours_trend`: linear hours-per-repeated-experience slope after ordering similar history by completion date. Negative values indicate decreasing historical effort; positive values indicate increasing effort. It is zero with fewer than two similar DIDs.
+
+### 6.7 v2-fast Candidate Filtering and Persistent Cache
+
+Expensive item-by-item TLF title matching now compares the union of:
+
+- the 50 most recent historical DIDs;
+- the 100 most recent DIDs in the same Study;
+- the 100 most recent DIDs with any exact TLF/ADaM/SDTM overlap;
+- the 25 most recent DIDs in the same TA.
+
+This restriction applies only to expensive DID-pair similarity and the repeated-similar-work features above. Personal median effort, historical counts, and prior-item unions still use all eligible personal history before the prediction date.
+
+TLF semantic pair results are keyed by content hashes of the target and historical TLF lists and persisted in `artifacts/did_effort_similarity_cache.joblib`. The cache includes an algorithm version, so changes to the matching algorithm or threshold invalidate old entries. Training checkpoints the cache every 2,000 records, allowing most completed work to survive an interrupted run. Every 500 records, the console reports progress, cache hits/misses, candidate comparisons, and skipped comparisons.
+
+### 6.8 Historical Overlap and Time Interval
 
 The model also uses:
 
@@ -645,14 +715,16 @@ Run:
 ```powershell
 py .\effort_prediction.py train `
   --input .\data\did_effort_training.json `
-  --model .\artifacts\did_effort_model.joblib
+  --model .\artifacts\did_effort_model.joblib `
+  --cache .\artifacts\did_effort_similarity_cache.joblib
 ```
 
 If `--input` is omitted, the program reads training records directly from Neo4j:
 
 ```powershell
 py .\effort_prediction.py train `
-  --model .\artifacts\did_effort_model.joblib
+  --model .\artifacts\did_effort_model.joblib `
+  --cache .\artifacts\did_effort_similarity_cache.joblib
 ```
 
 For production, retaining the two-stage `extract → manual review → train` process is recommended.
@@ -858,7 +930,8 @@ If many records are excluded, fix the data or clarify the business rules first; 
 ```powershell
 py .\effort_prediction.py train `
   --input .\data\did_effort_training.json `
-  --model .\artifacts\did_effort_model.joblib
+  --model .\artifacts\did_effort_model.joblib `
+  --cache .\artifacts\did_effort_similarity_cache.joblib
 ```
 
 ### Step 5: Review Metrics
@@ -887,7 +960,7 @@ Choose a Planned/Ongoing DID with a known task scope, run a prediction, and ask 
 1. When `TIME_ON` does not distinguish Generation from QC, only combined effort can be predicted.
 2. Monthly effort may not be divisible precisely by task completion date.
 3. Without scope snapshots, strict historical backtesting is limited.
-4. Similarity depends on task-name normalization and cannot fully understand semantics.
+4. TLF title approximation uses character n-grams rather than embeddings and cannot fully understand deep semantics.
 5. Current P80/P90 values use global residual adjustments, so interval width does not vary with sample uncertainty.
 6. The current model uses aggregated Person-DID labels and cannot determine how much effort a specific TLF consumed.
 7. Individual-history features do not share records completed on the same day; this is a conservative anti-leakage strategy.

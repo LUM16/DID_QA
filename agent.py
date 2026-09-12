@@ -208,7 +208,8 @@ def _format_effort_prediction(
             lines.extend(
                 (
                     f"- {item['did']}：实际 {item['actual_hours']} 小时，"
-                    f"总体相似度 {item['overall_similarity']:.1%}"
+                    f"精确总体相似度 {item['overall_similarity']:.1%}，"
+                    f"TLF标题近似度 {item['tlf_semantic_similarity']:.1%}"
                 )
                 for item in similar[:3]
             )
@@ -236,7 +237,8 @@ def _format_effort_prediction(
         lines.extend(
             (
                 f"- {item['did']}: {item['actual_hours']} actual hours, "
-                f"{item['overall_similarity']:.1%} overall similarity"
+                f"{item['overall_similarity']:.1%} exact overall similarity, "
+                f"{item['tlf_semantic_similarity']:.1%} TLF title similarity"
             )
             for item in similar[:3]
         )
