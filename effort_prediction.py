@@ -10,6 +10,7 @@ import re
 import sys
 from datetime import date, datetime
 from functools import lru_cache
+from itertools import groupby
 from pathlib import Path
 from statistics import median
 from typing import Any, Iterable
@@ -26,7 +27,7 @@ from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 from neo4j_client import get_driver, load_env
 
-MODEL_VERSION = "did-effort-ridge-v2-fast"
+MODEL_VERSION = "did-effort-ridge-v3-robust"
 DEFAULT_MODEL_PATH = (
     Path(__file__).resolve().parent / "artifacts" / "did_effort_model.joblib"
 )
@@ -78,6 +79,13 @@ NUMERIC_FEATURES = [
     "tlf_prior_overlap_count",
     "adam_prior_overlap_count",
     "sdtm_prior_overlap_count",
+    "tlf_prior_coverage",
+    "adam_prior_coverage",
+    "sdtm_prior_coverage",
+    "overall_prior_coverage",
+    "tlf_unseen_count",
+    "adam_unseen_count",
+    "sdtm_unseen_count",
     "max_tlf_similarity",
     "max_tlf_semantic_similarity",
     "max_tlf_semantic_coverage",
@@ -713,20 +721,34 @@ def build_feature_row(
     target: dict[str, Any],
     history: list[dict[str, Any]],
     similarity_cache: dict[str, Any] | None = None,
+    *,
+    eligible_history: list[dict[str, Any]] | None = None,
+    person_history_override: list[dict[str, Any]] | None = None,
+    global_statistics: dict[str, float] | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Build time-safe features and return the most similar personal history."""
     target_date_value = target.get("completion_date") or target.get("as_of_date")
     target_date = _as_date(target_date_value) if target_date_value else date.today()
-    eligible = [
-        row
-        for row in history
-        if row.get("completion_date") and _as_date(row["completion_date"]) < target_date
-    ]
-    person_history = [
-        row
-        for row in eligible
-        if _normalized_name(row.get("person")) == _normalized_name(target.get("person"))
-    ]
+    eligible = (
+        eligible_history
+        if eligible_history is not None
+        else [
+            row
+            for row in history
+            if row.get("completion_date")
+            and _as_date(row["completion_date"]) < target_date
+        ]
+    )
+    person_history = (
+        person_history_override
+        if person_history_override is not None
+        else [
+            row
+            for row in eligible
+            if _normalized_name(row.get("person"))
+            == _normalized_name(target.get("person"))
+        ]
+    )
     candidate_history = _similarity_candidates(target, person_history)
     if similarity_cache is not None:
         similarity_cache["candidate_pairs"] += len(candidate_history)
@@ -734,12 +756,18 @@ def build_feature_row(
             len(person_history) - len(candidate_history)
         )
 
-    global_hours = [_number(row["actual_hours"]) for row in eligible]
-    global_rates = [
-        _number(row["actual_hours"]) / _number(row["task_count"])
-        for row in eligible
-        if _number(row.get("task_count")) > 0
-    ]
+    if global_statistics is None:
+        global_hours = [_number(row["actual_hours"]) for row in eligible]
+        global_rates = [
+            _number(row["actual_hours"]) / _number(row["task_count"])
+            for row in eligible
+            if _number(row.get("task_count")) > 0
+        ]
+        global_statistics = {
+            "completed_count": float(len(eligible)),
+            "median_hours": _safe_median(global_hours),
+            "median_hours_per_task": _safe_median(global_rates),
+        }
     person_hours = [_number(row["actual_hours"]) for row in person_history]
     person_rates = [
         _number(row["actual_hours"]) / _number(row["task_count"])
@@ -809,23 +837,49 @@ def build_feature_row(
     )
 
     feature = {field: _number(target.get(field)) for field in TASK_FIELDS}
+    prior_overlap_counts = {
+        kind: len(target_sets[kind] & historical_union[kind])
+        for kind in ("tlfs", "adams", "sdtms")
+    }
+    prior_coverages = {
+        kind: (
+            prior_overlap_counts[kind] / len(target_sets[kind])
+            if target_sets[kind]
+            else 0.0
+        )
+        for kind in ("tlfs", "adams", "sdtms")
+    }
+    available_prior_coverages = [
+        prior_coverages[kind]
+        for kind in ("tlfs", "adams", "sdtms")
+        if target_sets[kind]
+    ]
     feature.update(
         {
             "person_completed_count": float(len(person_history)),
             "person_median_hours": _safe_median(person_hours),
             "person_recent_median_hours": _safe_median(person_hours[-5:]),
             "person_median_hours_per_task": _safe_median(person_rates),
-            "global_completed_count": float(len(eligible)),
-            "global_median_hours": _safe_median(global_hours),
-            "global_median_hours_per_task": _safe_median(global_rates),
-            "tlf_prior_overlap_count": float(
-                len(target_sets["tlfs"] & historical_union["tlfs"])
+            "global_completed_count": global_statistics["completed_count"],
+            "global_median_hours": global_statistics["median_hours"],
+            "global_median_hours_per_task": global_statistics[
+                "median_hours_per_task"
+            ],
+            "tlf_prior_overlap_count": float(prior_overlap_counts["tlfs"]),
+            "adam_prior_overlap_count": float(prior_overlap_counts["adams"]),
+            "sdtm_prior_overlap_count": float(prior_overlap_counts["sdtms"]),
+            "tlf_prior_coverage": prior_coverages["tlfs"],
+            "adam_prior_coverage": prior_coverages["adams"],
+            "sdtm_prior_coverage": prior_coverages["sdtms"],
+            "overall_prior_coverage": _safe_mean(available_prior_coverages),
+            "tlf_unseen_count": float(
+                len(target_sets["tlfs"]) - prior_overlap_counts["tlfs"]
             ),
-            "adam_prior_overlap_count": float(
-                len(target_sets["adams"] & historical_union["adams"])
+            "adam_unseen_count": float(
+                len(target_sets["adams"]) - prior_overlap_counts["adams"]
             ),
-            "sdtm_prior_overlap_count": float(
-                len(target_sets["sdtms"] & historical_union["sdtms"])
+            "sdtm_unseen_count": float(
+                len(target_sets["sdtms"]) - prior_overlap_counts["sdtms"]
             ),
             "max_tlf_similarity": max(
                 (item["tlf_similarity"] for item in similarities), default=0.0
@@ -903,27 +957,60 @@ def build_training_features(
     features = []
     labels = []
     total = len(ordered)
-    for index, row in enumerate(ordered, start=1):
-        feature, _ = build_feature_row(row, ordered, similarity_cache)
-        features.append(feature)
-        labels.append(_number(row["actual_hours"]))
-        if show_progress and (index % PROGRESS_INTERVAL == 0 or index == total):
-            stats = similarity_cache or _new_similarity_cache()
-            print(
-                "Feature progress: "
-                f"{index}/{total} records; "
-                f"cache hits={stats['hits']}, misses={stats['misses']}; "
-                f"candidate pairs={stats['candidate_pairs']}, "
-                f"skipped={stats['skipped_history_pairs']}",
-                file=sys.stderr,
-                flush=True,
+    eligible_history: list[dict[str, Any]] = []
+    person_histories: dict[str, list[dict[str, Any]]] = {}
+    processed = 0
+    for _, same_day_rows in groupby(
+        ordered, key=lambda row: str(row["completion_date"])[:10]
+    ):
+        day_rows = list(same_day_rows)
+        global_hours = [_number(row["actual_hours"]) for row in eligible_history]
+        global_rates = [
+            _number(row["actual_hours"]) / _number(row["task_count"])
+            for row in eligible_history
+            if _number(row.get("task_count")) > 0
+        ]
+        global_statistics = {
+            "completed_count": float(len(eligible_history)),
+            "median_hours": _safe_median(global_hours),
+            "median_hours_per_task": _safe_median(global_rates),
+        }
+        for row in day_rows:
+            person_key = _normalized_name(row.get("person"))
+            feature, _ = build_feature_row(
+                row,
+                [],
+                similarity_cache,
+                eligible_history=eligible_history,
+                person_history_override=person_histories.get(person_key, []),
+                global_statistics=global_statistics,
             )
-        if (
-            similarity_cache is not None
-            and similarity_cache_path is not None
-            and index % CACHE_CHECKPOINT_INTERVAL == 0
-        ):
-            _save_similarity_cache(similarity_cache, similarity_cache_path)
+            features.append(feature)
+            labels.append(_number(row["actual_hours"]))
+            processed += 1
+            if show_progress and (
+                processed % PROGRESS_INTERVAL == 0 or processed == total
+            ):
+                stats = similarity_cache or _new_similarity_cache()
+                print(
+                    "Feature progress: "
+                    f"{processed}/{total} records; "
+                    f"cache hits={stats['hits']}, misses={stats['misses']}; "
+                    f"candidate pairs={stats['candidate_pairs']}, "
+                    f"skipped={stats['skipped_history_pairs']}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+            if (
+                similarity_cache is not None
+                and similarity_cache_path is not None
+                and processed % CACHE_CHECKPOINT_INTERVAL == 0
+            ):
+                _save_similarity_cache(similarity_cache, similarity_cache_path)
+        eligible_history.extend(day_rows)
+        for row in day_rows:
+            person_key = _normalized_name(row.get("person"))
+            person_histories.setdefault(person_key, []).append(row)
     return features, np.asarray(labels, dtype=float)
 
 
@@ -984,6 +1071,98 @@ def _predict_hours(model: Pipeline, features: list[dict[str, Any]]) -> np.ndarra
     return np.maximum(0.0, np.expm1(model.predict(_matrix(features))))
 
 
+def _history_baseline_predictions(
+    features: list[dict[str, Any]],
+) -> np.ndarray:
+    return np.asarray(
+        [
+            (
+                _number(feature.get("person_median_hours"))
+                if _number(feature.get("person_completed_count")) > 0
+                and _number(feature.get("person_median_hours")) > 0
+                else _number(feature.get("global_median_hours"))
+            )
+            for feature in features
+        ],
+        dtype=float,
+    )
+
+
+def _apply_prediction_policy(
+    ridge_predictions: np.ndarray,
+    features: list[dict[str, Any]],
+    policy: dict[str, Any],
+) -> np.ndarray:
+    baseline_predictions = _history_baseline_predictions(features)
+    ridge_weight = float(policy["ridge_weight"])
+    predictions = (
+        ridge_weight * ridge_predictions
+        + (1.0 - ridge_weight) * baseline_predictions
+        + float(policy["offset_hours"])
+    )
+    cap_hours = policy.get("cap_hours")
+    if cap_hours is not None:
+        predictions = np.minimum(predictions, float(cap_hours))
+    return np.maximum(0.0, predictions)
+
+
+def _select_prediction_policy(
+    training_labels: np.ndarray,
+    calibration_features: list[dict[str, Any]],
+    calibration_labels: np.ndarray,
+    ridge_predictions: np.ndarray,
+) -> dict[str, Any]:
+    """Choose a robust blend and cap on calibration data only."""
+    baseline_predictions = _history_baseline_predictions(calibration_features)
+    cap_candidates: list[tuple[float | None, float | None]] = [
+        (quantile, float(np.quantile(training_labels, quantile)))
+        for quantile in (0.99, 0.995, 0.999, 1.0)
+    ]
+    cap_candidates.append((None, None))
+    candidates = []
+    for ridge_weight in np.linspace(0.0, 1.0, 21):
+        blended = (
+            ridge_weight * ridge_predictions
+            + (1.0 - ridge_weight) * baseline_predictions
+        )
+        for offset_hours in (
+            0.0,
+            float(np.median(calibration_labels - blended)),
+        ):
+            for cap_quantile, cap_hours in cap_candidates:
+                policy = {
+                    "ridge_weight": float(ridge_weight),
+                    "baseline_weight": float(1.0 - ridge_weight),
+                    "offset_hours": offset_hours,
+                    "cap_quantile": cap_quantile,
+                    "cap_hours": cap_hours,
+                }
+                predicted = _apply_prediction_policy(
+                    ridge_predictions, calibration_features, policy
+                )
+                metrics = _metrics(calibration_labels, predicted)
+                candidates.append((metrics["wape"], metrics["mae"], policy, metrics))
+    _, _, selected, selected_metrics = min(
+        candidates, key=lambda candidate: (candidate[0], candidate[1])
+    )
+    selected["calibration_metrics"] = selected_metrics
+    return selected
+
+
+def _policy_for_final_model(
+    policy: dict[str, Any], all_labels: np.ndarray
+) -> dict[str, Any]:
+    final_policy = dict(policy)
+    cap_quantile = final_policy.get("cap_quantile")
+    final_policy["calibration_cap_hours"] = final_policy.get("cap_hours")
+    final_policy["cap_hours"] = (
+        float(np.quantile(all_labels, cap_quantile))
+        if cap_quantile is not None
+        else None
+    )
+    return final_policy
+
+
 @lru_cache(maxsize=4)
 def _load_model_artifact(path: str, modified_time_ns: int) -> dict[str, Any]:
     """Cache a model until its on-disk modification time changes."""
@@ -1042,15 +1221,31 @@ def train_model(
     evaluation_model.fit(
         _matrix([features[i] for i in train_idx]), np.log1p(labels[train_idx])
     )
-    calibration_predictions = _predict_hours(
-        evaluation_model, [features[i] for i in calibration_idx]
+    calibration_features = [features[i] for i in calibration_idx]
+    raw_calibration_predictions = _predict_hours(
+        evaluation_model, calibration_features
+    )
+    prediction_policy = _select_prediction_policy(
+        labels[train_idx],
+        calibration_features,
+        labels[calibration_idx],
+        raw_calibration_predictions,
+    )
+    calibration_predictions = _apply_prediction_policy(
+        raw_calibration_predictions,
+        calibration_features,
+        prediction_policy,
     )
     calibration_residuals = labels[calibration_idx] - calibration_predictions
     upper_adjustments = {
         "p80": max(0.0, float(np.quantile(calibration_residuals, 0.80))),
         "p90": max(0.0, float(np.quantile(calibration_residuals, 0.90))),
     }
-    test_predictions = _predict_hours(evaluation_model, [features[i] for i in test_idx])
+    test_features = [features[i] for i in test_idx]
+    raw_test_predictions = _predict_hours(evaluation_model, test_features)
+    test_predictions = _apply_prediction_policy(
+        raw_test_predictions, test_features, prediction_policy
+    )
     metrics = _metrics(labels[test_idx], test_predictions)
     metrics["p80_coverage"] = float(
         np.mean(labels[test_idx] <= test_predictions + upper_adjustments["p80"])
@@ -1058,9 +1253,17 @@ def train_model(
     metrics["p90_coverage"] = float(
         np.mean(labels[test_idx] <= test_predictions + upper_adjustments["p90"])
     )
+    benchmark_metrics = {
+        "raw_ridge": _metrics(labels[test_idx], raw_test_predictions),
+        "person_history_baseline": _metrics(
+            labels[test_idx], _history_baseline_predictions(test_features)
+        ),
+        "robust_blend": dict(metrics),
+    }
 
     final_model = _pipeline()
     final_model.fit(_matrix(features), np.log1p(labels))
+    final_prediction_policy = _policy_for_final_model(prediction_policy, labels)
     artifact = {
         "model_version": MODEL_VERSION,
         "trained_at": datetime.now().astimezone().isoformat(),
@@ -1069,7 +1272,9 @@ def train_model(
         "numeric_features": NUMERIC_FEATURES,
         "categorical_features": CATEGORICAL_FEATURES,
         "upper_adjustments": upper_adjustments,
+        "prediction_policy": final_prediction_policy,
         "metrics": metrics,
+        "benchmark_metrics": benchmark_metrics,
         "split": {
             "train_records": len(train_idx),
             "calibration_records": len(calibration_idx),
@@ -1087,6 +1292,8 @@ def train_model(
         "eligible_records": len(cleaned),
         "metrics": metrics,
         "upper_adjustments": upper_adjustments,
+        "prediction_policy": final_prediction_policy,
+        "benchmark_metrics": benchmark_metrics,
         "split": artifact["split"],
         "similarity_cache": (
             {
@@ -1116,8 +1323,10 @@ def predict_record(
         str(resolved_model_path), resolved_model_path.stat().st_mtime_ns
     )
     if (
-        artifact.get("numeric_features") != NUMERIC_FEATURES
+        artifact.get("model_version") != MODEL_VERSION
+        or artifact.get("numeric_features") != NUMERIC_FEATURES
         or artifact.get("categorical_features") != CATEGORICAL_FEATURES
+        or not isinstance(artifact.get("prediction_policy"), dict)
     ):
         raise ValueError(
             "The saved effort model uses an older feature schema. "
@@ -1131,7 +1340,12 @@ def predict_record(
         if _as_date(row["completion_date"]) < _as_date(target["as_of_date"])
     ]
     feature, similar = build_feature_row(target, history)
-    p50 = float(_predict_hours(artifact["model"], [feature])[0])
+    raw_prediction = _predict_hours(artifact["model"], [feature])
+    p50 = float(
+        _apply_prediction_policy(
+            raw_prediction, [feature], artifact["prediction_policy"]
+        )[0]
+    )
     adjustments = artifact["upper_adjustments"]
     warnings = []
     if feature["person_completed_count"] < 5:
@@ -1161,7 +1375,19 @@ def predict_record(
                 "weighted_similar_hours_per_task",
                 "latest_similar_hours",
                 "similar_hours_trend",
+                "tlf_prior_coverage",
+                "adam_prior_coverage",
+                "sdtm_prior_coverage",
+                "overall_prior_coverage",
+                "tlf_unseen_count",
+                "adam_unseen_count",
+                "sdtm_unseen_count",
             )
+        },
+        "prediction_policy": {
+            "ridge_weight": artifact["prediction_policy"]["ridge_weight"],
+            "baseline_weight": artifact["prediction_policy"]["baseline_weight"],
+            "cap_hours": artifact["prediction_policy"]["cap_hours"],
         },
         "similar_historical_dids": similar,
         "warnings": warnings,

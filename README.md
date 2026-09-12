@@ -39,6 +39,7 @@ The project includes a read-only Neo4j-to-model pipeline for forecasting the
 total hands-on hours for a person assigned to a planned or ongoing DID.
 
 Detailed technical documentation: [Chinese](docs/effort_prediction.md) | [English](docs/effort_prediction_en.md).
+For a Chinese v1-to-v3 reporting summary, see [model evolution](docs/effort_prediction_model_evolution.md).
 
 Install dependencies, then export completed DID history:
 
@@ -57,7 +58,7 @@ The training command reports MAE, median absolute error, RMSE, WAPE, bias, and
 P80/P90 coverage. It saves the fitted preprocessing pipeline, model, interval
 adjustments, and eligible history in one versioned artifact.
 
-Model v2-fast keeps exact TLF-name Jaccard features and local character 3–5
+Model v3-robust keeps exact TLF-name Jaccard features and local character 3–5
 gram title similarity with Type/Source weighting and one-to-one matching. It
 reduces expensive comparisons to relevant/recent historical candidates and
 persists semantic pair results in the `--cache` file. Later retraining runs
@@ -66,8 +67,14 @@ to the console.
 
 The model also learns from repeated similar work through top-3/top-5 similarity,
 similar-DID counts, similarity-weighted hours and hours-per-task, latest similar
-hours, and the historical similar-hours trend. After updating from v1 or v2,
-retrain the model; the existing extracted JSON can be reused.
+hours, and the historical similar-hours trend. Cross-DID union coverage measures
+whether multiple historical DIDs collectively cover the target task set.
+
+To prevent extreme Ridge extrapolation, the calibration split selects a blend
+between Ridge and the person's historical median plus an optional historical
+effort cap. Training reports raw Ridge, personal-baseline, and robust-blend
+metrics. After updating from an older version, retrain the model; the existing
+extracted JSON and semantic cache can be reused.
 
 Predict a planned or ongoing assignment:
 

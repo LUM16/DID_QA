@@ -477,10 +477,21 @@ TLF 语义匹配结果按目标/历史 TLF 清单的内容哈希保存到
 tlf_prior_overlap_count
 adam_prior_overlap_count
 sdtm_prior_overlap_count
+tlf_prior_coverage
+adam_prior_coverage
+sdtm_prior_coverage
+overall_prior_coverage
+tlf_unseen_count
+adam_unseen_count
+sdtm_unseen_count
 days_since_similar_work
 ```
 
 前三个特征表示目标任务中有多少项曾经由此人在历史 DID 中遇到。
+
+`*_prior_coverage` 使用该人员全部历史 DID 的任务并集作为分母，能够识别“目标
+TLF 分别出现在多个历史 DID 中”的组合覆盖场景。`*_unseen_count` 表示目标中从未
+出现过的任务数量。
 
 `days_since_similar_work` 表示距离最相似历史 DID 完成的天数。近期做过相似任务和多年以前做过相似任务可能具有不同复用价值。
 
@@ -591,6 +602,28 @@ OneHotEncoder(handle_unknown="ignore")
 ```
 
 这样训练与预测一定使用相同的字段顺序、填充规则、标准化参数和类别编码，避免手工处理不一致。
+
+### 7.6 稳健预测策略
+
+v3 不直接使用未经约束的 Ridge 输出。程序仅使用校准集自动选择：
+
+- Ridge 预测权重；
+- 个人历史中位数基准权重；
+- 可选的残差偏移；
+- 根据训练标签分位数确定的预测上限。
+
+选择目标是校准集 WAPE 最低。测试集不参与策略选择，因此不会泄漏测试结果。
+若某人没有历史记录，个人基准自动回退到预测日期前的全局中位工时。
+
+训练输出中的 `benchmark_metrics` 同时报告：
+
+```text
+raw_ridge
+person_history_baseline
+robust_blend
+```
+
+只有 `robust_blend` 优于简单基准时，才应将新模型用于正式预测。
 
 ## 8. 时间切分和数据泄漏控制
 
@@ -737,6 +770,8 @@ py .\effort_prediction.py train `
 - 符合资格的历史记录；
 - 数值和类别特征列表；
 - P80/P90 调整量；
+- 校准得到的 Ridge/个人基准融合及预测上限策略；
+- 原始 Ridge、个人基准和稳健融合的测试指标；
 - 测试指标；
 - train/calibration/test 样本和 DID 数量。
 

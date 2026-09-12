@@ -477,10 +477,22 @@ The model also uses:
 tlf_prior_overlap_count
 adam_prior_overlap_count
 sdtm_prior_overlap_count
+tlf_prior_coverage
+adam_prior_coverage
+sdtm_prior_coverage
+overall_prior_coverage
+tlf_unseen_count
+adam_unseen_count
+sdtm_unseen_count
 days_since_similar_work
 ```
 
 The first three features indicate how many items in the target tasks the person has encountered in historical DIDs.
+
+The `*_prior_coverage` features use the union of that person's tasks across all
+historical DIDs. They therefore recognize cases where several historical DIDs
+collectively cover the target task set. The `*_unseen_count` features count
+target tasks that have never appeared in the person's history.
 
 `days_since_similar_work` is the number of days since the most similar historical DID was completed. Similar work performed recently may have a different reuse value from similar work performed several years ago.
 
@@ -591,6 +603,31 @@ Raw features
 ```
 
 This ensures that training and prediction use the same field order, imputation rules, scaling parameters, and categorical encoding, avoiding inconsistencies from manual processing.
+
+### 7.6 Robust Prediction Policy
+
+Version 3 does not use unconstrained Ridge output directly. Using only the
+calibration split, it selects:
+
+- the Ridge prediction weight;
+- the personal historical-median baseline weight;
+- an optional residual offset;
+- an optional prediction cap derived from a training-label quantile.
+
+The selected policy minimizes calibration WAPE. The test split is not involved
+in policy selection, preventing test leakage. For a person with no history, the
+baseline falls back to the global median available before the prediction date.
+
+The training output reports `benchmark_metrics` for:
+
+```text
+raw_ridge
+person_history_baseline
+robust_blend
+```
+
+A new model should be promoted only when `robust_blend` beats the simple
+baseline.
 
 ## 8. Temporal Splitting and Data-Leakage Control
 
@@ -737,6 +774,8 @@ The saved joblib artifact contains:
 - eligible historical records;
 - numeric and categorical feature lists;
 - P80/P90 adjustments;
+- the calibrated Ridge/personal-baseline blend and prediction-cap policy;
+- test metrics for raw Ridge, the personal baseline, and the robust blend;
 - test metrics;
 - train/calibration/test sample and DID counts.
 

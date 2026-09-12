@@ -7,15 +7,20 @@ import unittest
 from datetime import date, timedelta
 from pathlib import Path
 
+import numpy as np
+
 from effort_prediction import (
     TARGET_QUERY,
     TRAINING_QUERY,
+    _apply_prediction_policy,
     _load_similarity_cache,
     _save_similarity_cache,
+    _select_prediction_policy,
     _similarity_candidates,
     _tlf_semantic_similarity,
     _title_similarity,
     build_feature_row,
+    build_training_features,
     clean_training_records,
     predict_record,
     quality_report,
@@ -117,6 +122,19 @@ class EffortPredictionTests(unittest.TestCase):
         features, _ = build_feature_row(target, [previous, same_day])
         self.assertEqual(features["person_completed_count"], 0.0)
 
+    def test_incremental_training_features_match_direct_construction(self) -> None:
+        records = [make_record(index) for index in range(8)]
+        records[3]["completion_date"] = records[2]["completion_date"]
+        ordered = sorted(
+            records, key=lambda row: (row["completion_date"], str(row["did"]))
+        )
+        expected = [build_feature_row(row, ordered)[0] for row in ordered]
+
+        actual, labels = build_training_features(records)
+
+        self.assertEqual(actual, expected)
+        self.assertEqual(labels.tolist(), [row["actual_hours"] for row in ordered])
+
     def test_repeated_similarity_features_summarize_history(self) -> None:
         history = [make_record(index) for index in range(4)]
         hours = [10.0, 20.0, 30.0, 40.0]
@@ -139,6 +157,54 @@ class EffortPredictionTests(unittest.TestCase):
         self.assertAlmostEqual(features["weighted_similar_hours_per_task"], 5.25)
         self.assertEqual(features["latest_similar_hours"], 40.0)
         self.assertAlmostEqual(features["similar_hours_trend"], 10.0)
+
+    def test_prior_union_coverage_combines_multiple_historical_dids(self) -> None:
+        first = make_record(0)
+        first["tlfs"] = [
+            {"name": "TLF-A", "generation": first["person"], "qc": None}
+        ]
+        second = make_record(1)
+        second["tlfs"] = [
+            {"name": "TLF-B", "generation": second["person"], "qc": None}
+        ]
+        target = make_record(3)
+        target["tlfs"] = [
+            {"name": "TLF-A", "generation": target["person"], "qc": None},
+            {"name": "TLF-B", "generation": target["person"], "qc": None},
+        ]
+
+        features, _ = build_feature_row(target, [first, second])
+
+        self.assertEqual(features["tlf_prior_overlap_count"], 2.0)
+        self.assertEqual(features["tlf_prior_coverage"], 1.0)
+        self.assertEqual(features["tlf_unseen_count"], 0.0)
+        self.assertLess(features["max_tlf_similarity"], 1.0)
+
+    def test_prediction_policy_can_prefer_baseline_and_cap_outliers(self) -> None:
+        features = [
+            {
+                "person_completed_count": 10,
+                "person_median_hours": value,
+                "global_median_hours": 20,
+            }
+            for value in (10, 12, 14, 16)
+        ]
+        actual = np.asarray([11.0, 13.0, 15.0, 17.0])
+        ridge = np.asarray([1000.0, 900.0, 800.0, 700.0])
+        policy = _select_prediction_policy(
+            np.asarray([5.0, 10.0, 20.0, 40.0, 80.0]),
+            features,
+            actual,
+            ridge,
+        )
+        predictions = _apply_prediction_policy(ridge, features, policy)
+
+        self.assertLess(policy["ridge_weight"], 0.5)
+        self.assertLess(float(predictions.max()), 100.0)
+        self.assertLess(
+            np.abs(predictions - actual).sum(),
+            np.abs(ridge - actual).sum(),
+        )
 
     def test_candidate_filter_keeps_only_recent_unrelated_history(self) -> None:
         history = [make_record(index) for index in range(80)]
@@ -204,10 +270,14 @@ class EffortPredictionTests(unittest.TestCase):
             self.assertTrue(model_path.exists())
 
         self.assertEqual(training["eligible_records"], 30)
+        self.assertIn("person_history_baseline", training["benchmark_metrics"])
+        self.assertIn("ridge_weight", training["prediction_policy"])
         self.assertGreaterEqual(result["p80_hours"], result["p50_hours"])
         self.assertGreaterEqual(result["p90_hours"], result["p80_hours"])
         self.assertEqual(result["prediction_type"], "total_hours")
         self.assertIn("similar_hours_trend", result["similarity_features"])
+        self.assertIn("overall_prior_coverage", result["similarity_features"])
+        self.assertIn("ridge_weight", result["prediction_policy"])
 
 if __name__ == "__main__":
     unittest.main()
