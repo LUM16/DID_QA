@@ -80,7 +80,8 @@ DID_REFERENCE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 DID_ONLY_PREFIX_PATTERN = re.compile(
-    r"^(?:换成|改成|改为|使用|用|switch to|change to)$", re.IGNORECASE
+    r"^(?:那|这个|该|上述|换成|改成|改为|使用|用|switch to|change to)$",
+    re.IGNORECASE,
 )
 
 
@@ -133,6 +134,51 @@ def _is_effort_prediction_question(
             question[: DID_PATTERN.search(question).start()].strip(" ,，:：")
         )
     )
+
+
+def _prediction_intent_candidate(
+    question: str, history: list[dict[str, Any]] | None
+) -> bool:
+    return bool(DID_PATTERN.search(question) or _latest_prediction_context(history))
+
+
+def classify_effort_prediction_intent(
+    question: str, history: list[dict[str, Any]] | None = None
+) -> tuple[bool, dict[str, int]]:
+    """Classify ambiguous DID questions before choosing prediction or Cypher."""
+    if _is_effort_prediction_question(question, history):
+        return True, empty_usage()
+    if not _prediction_intent_candidate(question, history):
+        return False, empty_usage()
+
+    history_text = "\n".join(
+        f"{message['role']}: {message['content']}" for message in (history or [])[-6:]
+    )
+    context = _latest_prediction_context(history)
+    system = """Classify whether the user is asking for a future effort forecast.
+Return exactly one JSON object: {"intent":"effort_prediction"} or
+{"intent":"neo4j_query"}.
+
+Choose effort_prediction only when the user asks to estimate, forecast, plan,
+or determine the future total hands-on hours needed for a person and DID.
+Choose neo4j_query for already recorded hours, delivery status, task details,
+lists, counts, or any other graph-data question. Use the prediction context
+only to resolve references such as "that DID" or "that person"; it does not
+make every follow-up a forecast. Do not calculate hours or add explanation."""
+    user = f"""Prediction context:
+{json.dumps(context, ensure_ascii=False) if context else "(none)"}
+
+Recent conversation:
+{history_text or "(none)"}
+
+Current request:
+{question}"""
+    raw, usage = _chat(system, user, temperature=0)
+    payload = _extract_json_object(raw)
+    intent = payload.get("intent")
+    if intent not in {"effort_prediction", "neo4j_query"}:
+        raise ValueError("Intent classifier returned an unsupported intent.")
+    return intent == "effort_prediction", usage
 
 
 def _extract_json_object(text: str) -> dict[str, Any]:
@@ -391,7 +437,9 @@ def _format_effort_prediction(
 
 
 def answer_effort_prediction(
-    question: str, history: list[dict[str, Any]] | None = None
+    question: str,
+    history: list[dict[str, Any]] | None = None,
+    initial_usage: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     parameters, usage = extract_effort_prediction_parameters(question, history)
     prediction = predict_effort(
@@ -407,7 +455,7 @@ def answer_effort_prediction(
         "rows": [prediction],
         "schema": None,
         "error": None,
-        "usage": usage,
+        "usage": add_usage(initial_usage or empty_usage(), usage),
         "prediction": prediction,
     }
 
@@ -598,9 +646,12 @@ def ask(
     schema: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     load_env()
-    if _is_effort_prediction_question(question, history):
+    is_prediction, intent_usage = classify_effort_prediction_intent(question, history)
+    if is_prediction:
         try:
-            result = answer_effort_prediction(question, history)
+            result = answer_effort_prediction(
+                question, history, initial_usage=intent_usage
+            )
             result["schema"] = schema
             return result
         except Exception as exc:  # noqa: BLE001
@@ -617,7 +668,7 @@ def ask(
     schema = schema or get_schema()
     last_error = None
     cypher = ""
-    usage = empty_usage()
+    usage = intent_usage
 
     for _attempt in range(3):
         try:

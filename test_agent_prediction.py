@@ -79,6 +79,29 @@ class AgentPredictionTests(unittest.TestCase):
         )
         self.assertEqual(result["usage"]["total_tokens"], 0)
 
+    @patch("agent.predict_effort", return_value=PREDICTION)
+    @patch(
+        "agent._chat",
+        return_value=(
+            '{"intent":"effort_prediction"}',
+            {"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6},
+        ),
+    )
+    def test_llm_classifies_flexible_forecast_wording(
+        self, mock_chat, mock_predict
+    ) -> None:
+        history = [{"role": "assistant", "content": "Prior prediction", "prediction": PREDICTION}]
+
+        result = agent.ask("C5001001_60 大概要投入多久？", history=history)
+
+        mock_chat.assert_called_once()
+        mock_predict.assert_called_once_with(
+            person="Chen, Zhenchao (Riven)",
+            did="C5001001_60",
+            as_of_date="2026-09-11",
+        )
+        self.assertEqual(result["usage"]["total_tokens"], 6)
+
     def test_prediction_intent_does_not_match_historical_hours(self) -> None:
         self.assertTrue(
             agent._is_effort_prediction_question(
