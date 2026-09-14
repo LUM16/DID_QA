@@ -250,6 +250,110 @@ Properties:
 (Person)-[:TIME_ON {From_Date, To_Date, Hour}]->(DIDN_Month)
 ```
 
+## Controlled Values
+
+Normalize user wording only for properties listed in this section. Use the exact value and capitalization shown below.
+
+### `Delivery.DID_Status`
+
+Valid values:
+
+- `Completed`
+- `Planned`
+- `Ongoing`
+- `Cancelled`
+- `Overdue`
+
+Interpretation examples:
+
+- "completed deliveries" means `Delivery.DID_Status = "Completed"`.
+- "planned deliveries" means `Delivery.DID_Status = "Planned"`.
+- "ongoing deliveries" means `Delivery.DID_Status = "Ongoing"`.
+- "cancelled deliveries" means `Delivery.DID_Status = "Cancelled"`.
+- "overdue deliveries" means `Delivery.DID_Status = "Overdue"`.
+
+### `Delivery.STD_Category`
+
+Valid values:
+
+- `CDARS`
+- `Mapping`
+- `General`
+
+### `Study_Info.Plan_Status`
+
+Valid values:
+
+- `COMPLETE`
+- `CONCEPT`
+- `ACTIVE`
+- `NA`
+- `PROPOSED`
+- `TERMINATED`
+- `CANCELLED`
+- `HOLD`
+- `PROPOSED-SNI`
+- `PAUSE`
+
+### `Study_Info.Study_Type`
+
+Valid values:
+
+- `INTERVENTIONAL`
+- `NON INTERVENTIONAL`
+
+### `Study_Info.Subject_Type`
+
+Valid values:
+
+- `PATIENTS`
+- `VOLUNTEERS`
+- `NO SUBJECTS`
+- `BOTH (PATIENTS AND VOLUNTEERS)`
+
+### `Submission.Milestone`
+
+Valid values:
+
+- `MAA Submission`
+- `NDA Submission`
+- `CNDA Submission`
+- `JNDA Submission`
+
+### `Unblind.Unblind_Programming_Support`
+
+Valid values:
+
+- `TRUE`
+- `FALSE`
+
+## Example Values
+
+The following values are examples only and are not exhaustive.
+
+- `Delivery.Reporting_System`: `CDARS`, `SIGMA`
+- `Delivery.Reporting_Event`: `Clinical Study Report`, `Basic Results`
+- `Delivery.Quality`: `Fit for Purpose`, `Minor Issue`
+- `Delivery.Delivery_Content`: `TLFs, ADaM and SDTM`, `Only TLFs`
+
+## Organizational Reference
+
+### TA Lead Reference List
+
+The following `Person.Name` values are defined as TA Leads in the current DID data preparation logic:
+
+- `Bukenya, Twaha`
+- `Chen, Gary`
+- `Hagendoorn, Michael (L-SGN US)`
+- `Hintze, Rebecca E`
+- `Iyer, Priya Venkatesan`
+- `Pearce, Stuart`
+- `Shen, Henry`
+- `Smith, Matt`
+- `Vacca, John D`
+- `Zhang, Liping`
+
+
 ## Common Cypher Patterns
 
 ### Flexible person-name matching
@@ -301,5 +405,7 @@ WHERE taLead.TA_Lead = "Y"
 
 - Use only the labels, relationships, and properties defined here.
 - Do not invent labels, relationships, or properties.
-- Use read-only Cypher for the CLI Agent.
+- Use read-only Cypher for the Agent.
 - Do not use write operations such as `CREATE`, `MERGE`, `DELETE`, `SET`, `REMOVE`, or `DROP`.
+- Normalize user wording only for properties listed under **Controlled Values**.
+- Values under **Example Values** are illustrative and not exhaustive.
