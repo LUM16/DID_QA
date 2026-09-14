@@ -34,6 +34,8 @@ PREDICTION = {
             "actual_hours": 14.4,
             "overall_similarity": 1.0,
             "tlf_semantic_similarity": 1.0,
+            "adam_similarity": 1.0,
+            "sdtm_similarity": 1.0,
         }
     ],
     "warnings": [],
@@ -74,6 +76,9 @@ class AgentPredictionTests(unittest.TestCase):
         self.assertIn("建议排期（P80）：**40.0 小时**", result["answer"])
         self.assertIn("预测可信度：**高**", result["answer"])
         self.assertIn("人员匹配：输入 `Riven`", result["answer"])
+        self.assertIn("TLF 标题近似度 100%", result["answer"])
+        self.assertIn("ADaM 相似度 100%", result["answer"])
+        self.assertIn("SDTM 相似度 100%", result["answer"])
         self.assertNotIn("总体相似度", result["answer"])
         self.assertEqual(result["usage"]["total_tokens"], 0)
 

@@ -259,7 +259,10 @@ def _format_effort_prediction(
                 (
                     f"- {item['did']}（{_same_study_label(item, prediction)}，"
                     f"{item.get('completion_date') or '完成日期未知'}）："
-                    f"实际 {item['actual_hours']} 小时"
+                    f"实际 {item['actual_hours']} 小时；"
+                    f"TLF 标题近似度 {item['tlf_semantic_similarity']:.0%}，"
+                    f"ADaM 相似度 {item['adam_similarity']:.0%}，"
+                    f"SDTM 相似度 {item['sdtm_similarity']:.0%}"
                 )
                 for item in similar[:3]
             )
@@ -288,7 +291,10 @@ def _format_effort_prediction(
             (
                 f"- {item['did']} ({_same_study_label(item, prediction)}, "
                 f"{item.get('completion_date') or 'completion date unavailable'}): "
-                f"{item['actual_hours']} actual hours"
+                f"{item['actual_hours']} actual hours; "
+                f"TLF title similarity {item['tlf_semantic_similarity']:.0%}, "
+                f"ADaM similarity {item['adam_similarity']:.0%}, "
+                f"SDTM similarity {item['sdtm_similarity']:.0%}"
             )
             for item in similar[:3]
         )
