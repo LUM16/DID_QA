@@ -1504,6 +1504,7 @@ def predict_record(
     return {
         "person": target.get("person"),
         "did": target.get("did"),
+        "study": target.get("study"),
         "prediction_type": "total_hours",
         "as_of_date": target["as_of_date"],
         "p50_hours": round(p50, 1),

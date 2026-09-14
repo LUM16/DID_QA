@@ -185,31 +185,81 @@ Current request:
     }, usage
 
 
+def _prediction_confidence(
+    prediction: dict[str, Any], chinese: bool
+) -> tuple[str, str]:
+    features = prediction.get("similarity_features") or {}
+    completed_count = int(prediction.get("person_completed_did_count") or 0)
+    high_similarity_count = float(features.get("similar_did_count_ge_85") or 0)
+    coverage = float(features.get("overall_prior_coverage") or 0)
+    unseen_count = sum(
+        float(features.get(name) or 0)
+        for name in ("tlf_unseen_count", "adam_unseen_count", "sdtm_unseen_count")
+    )
+    reasons = (
+        [f"{completed_count} 个历史 DID"]
+        if chinese
+        else [f"{completed_count} historical DIDs"]
+    )
+    if high_similarity_count:
+        reasons.append(
+            (
+                f"{int(high_similarity_count)} 个高相似历史案例"
+                if chinese
+                else f"{int(high_similarity_count)} highly similar historical cases"
+            )
+        )
+    if coverage >= 0.99 and unseen_count == 0:
+        reasons.append("无未见任务" if chinese else "no unseen tasks")
+    if (
+        completed_count >= 20
+        and high_similarity_count >= 3
+        and coverage >= 0.99
+        and unseen_count == 0
+    ):
+        return ("高" if chinese else "High"), ("；" if chinese else "; ").join(reasons)
+    if completed_count >= 5 and high_similarity_count >= 1:
+        return ("中" if chinese else "Medium"), ("；" if chinese else "; ").join(reasons)
+    return ("低" if chinese else "Low"), ("；" if chinese else "; ").join(reasons)
+
+
+def _same_study_label(item: dict[str, Any], prediction: dict[str, Any]) -> str:
+    item_study = item.get("study")
+    target_study = prediction.get("study")
+    if item_study and target_study:
+        return "同 Study" if item_study == target_study else "跨 Study"
+    return "Study 未知"
+
+
 def _format_effort_prediction(
-    prediction: dict[str, Any], question: str
+    prediction: dict[str, Any], question: str, requested_person: str | None = None
 ) -> str:
     chinese = bool(re.search(r"[\u4e00-\u9fff]", question))
     similar = prediction.get("similar_historical_dids") or []
     warnings = prediction.get("warnings") or []
+    confidence, confidence_reason = _prediction_confidence(prediction, chinese)
     if chinese:
         lines = [
-            (
-                f"预计 **{prediction['person']}** 完成 **{prediction['did']}** 的总工时："
-                f"**P50 {prediction['p50_hours']} 小时**、"
-                f"**P80 {prediction['p80_hours']} 小时**、"
-                f"**P90 {prediction['p90_hours']} 小时**。"
-            ),
+            f"**{prediction['person']}** 完成 **{prediction['did']}** 的预计总工时：",
+            f"- 最可能工时（P50）：**{prediction['p50_hours']} 小时**",
+            f"- 建议排期（P80）：**{prediction['p80_hours']} 小时**",
+            f"- 保守预留（P90）：**{prediction['p90_hours']} 小时**",
             "",
-            "日常资源规划建议参考 P80；P90 适合更保守的高风险规划。",
-            f"该人员在预测日期前有 {prediction['person_completed_did_count']} 个可用历史 DID。",
+            f"预测可信度：**{confidence}**（{confidence_reason}）。",
         ]
+        if requested_person and requested_person.casefold() != str(
+            prediction["person"]
+        ).casefold():
+            lines.append(
+                f"人员匹配：输入 `{requested_person}` → `{prediction['person']}`。"
+            )
         if similar:
             lines.extend(["", "最相似的历史案例："])
             lines.extend(
                 (
-                    f"- {item['did']}：实际 {item['actual_hours']} 小时，"
-                    f"精确总体相似度 {item['overall_similarity']:.1%}，"
-                    f"TLF标题近似度 {item['tlf_semantic_similarity']:.1%}"
+                    f"- {item['did']}（{_same_study_label(item, prediction)}，"
+                    f"{item.get('completion_date') or '完成日期未知'}）："
+                    f"实际 {item['actual_hours']} 小时"
                 )
                 for item in similar[:3]
             )
@@ -219,26 +269,26 @@ def _format_effort_prediction(
         return "\n".join(lines)
 
     lines = [
-        (
-            f"Estimated total effort for **{prediction['person']}** on "
-            f"**{prediction['did']}**: **P50 {prediction['p50_hours']} hours**, "
-            f"**P80 {prediction['p80_hours']} hours**, and "
-            f"**P90 {prediction['p90_hours']} hours**."
-        ),
+        f"Estimated total effort for **{prediction['person']}** on **{prediction['did']}**:",
+        f"- Most likely effort (P50): **{prediction['p50_hours']} hours**",
+        f"- Planning estimate (P80): **{prediction['p80_hours']} hours**",
+        f"- Conservative reserve (P90): **{prediction['p90_hours']} hours**",
         "",
-        "Use P80 for routine capacity planning and P90 for more conservative, high-risk planning.",
-        (
-            f"The person has {prediction['person_completed_did_count']} eligible "
-            "historical DIDs before the prediction date."
-        ),
+        f"Prediction confidence: **{confidence}** ({confidence_reason}).",
     ]
+    if requested_person and requested_person.casefold() != str(
+        prediction["person"]
+    ).casefold():
+        lines.append(
+            f"Person match: `{requested_person}` → `{prediction['person']}`."
+        )
     if similar:
         lines.extend(["", "Most similar historical cases:"])
         lines.extend(
             (
-                f"- {item['did']}: {item['actual_hours']} actual hours, "
-                f"{item['overall_similarity']:.1%} exact overall similarity, "
-                f"{item['tlf_semantic_similarity']:.1%} TLF title similarity"
+                f"- {item['did']} ({_same_study_label(item, prediction)}, "
+                f"{item.get('completion_date') or 'completion date unavailable'}): "
+                f"{item['actual_hours']} actual hours"
             )
             for item in similar[:3]
         )
@@ -258,7 +308,9 @@ def answer_effort_prediction(
         as_of_date=parameters["as_of_date"],
     )
     return {
-        "answer": _format_effort_prediction(prediction, question),
+        "answer": _format_effort_prediction(
+            prediction, question, requested_person=str(parameters["person"])
+        ),
         "cypher": "",
         "rows": [prediction],
         "schema": None,
