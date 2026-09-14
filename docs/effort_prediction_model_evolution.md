@@ -279,7 +279,109 @@ robust_blend              v3 正式预测
 
 这确保新模型不是只比旧版本好看，而是也要优于简单、透明的业务基准。
 
-## 8. 模型效果对比
+## 8. v3 使用的全部特征
+
+v3-robust 的 Ridge 部分共使用 **49 个特征**：45 个数值特征和 4 个类别特征。所有历史类特征只使用目标 DID 实际交付日期（或预测 `as_of_date`）之前的数据。
+
+### 8.1 当前任务量（12 个）
+
+| 特征 | 含义 |
+|---|---|
+| `task_count` | 此人负责的总任务数。 |
+| `task_generation_count` | 此人负责 Generation 的任务数。 |
+| `task_qc_count` | 此人负责 QC 的任务数。 |
+| `tlf_count` | 此人负责的 TLF 数量。 |
+| `tlf_generation_count` | 此人负责 Generation 的 TLF 数量。 |
+| `tlf_qc_count` | 此人负责 QC 的 TLF 数量。 |
+| `adam_count` | 此人负责的 ADaM 工作项数量。 |
+| `adam_generation_count` | 此人负责 Generation 的 ADaM 工作项数量。 |
+| `adam_qc_count` | 此人负责 QC 的 ADaM 工作项数量。 |
+| `sdtm_count` | 此人负责的 SDTM 工作项数量。 |
+| `sdtm_generation_count` | 此人负责 Generation 的 SDTM 工作项数量。 |
+| `sdtm_qc_count` | 此人负责 QC 的 SDTM 工作项数量。 |
+
+### 8.2 人员与全局历史效率（7 个）
+
+| 特征 | 含义 |
+|---|---|
+| `person_completed_count` | 此人在预测日期前完成的合格 DID 数。 |
+| `person_median_hours` | 此人历史实际工时的中位数。 |
+| `person_recent_median_hours` | 此人最近 5 个历史 DID 实际工时的中位数。 |
+| `person_median_hours_per_task` | 此人历史每任务工时的中位数。 |
+| `global_completed_count` | 预测日期前所有人员合格历史记录数。 |
+| `global_median_hours` | 所有人员历史实际工时的中位数。 |
+| `global_median_hours_per_task` | 所有人员历史每任务工时的中位数。 |
+
+### 8.3 多个历史 DID 的任务覆盖（10 个）
+
+这组特征回答：“目标任务中有多少内容，此人过去曾在一个或多个 DID 中做过？”
+
+| 特征 | 含义 |
+|---|---|
+| `tlf_prior_overlap_count` | 目标 TLF 中曾在此人任一历史 DID 出现过的数量。 |
+| `adam_prior_overlap_count` | 目标 ADaM 中曾在历史出现过的数量。 |
+| `sdtm_prior_overlap_count` | 目标 SDTM 中曾在历史出现过的数量。 |
+| `tlf_prior_coverage` | 已做过的目标 TLF 数量 / 目标 TLF 总数。 |
+| `adam_prior_coverage` | 已做过的目标 ADaM 数量 / 目标 ADaM 总数。 |
+| `sdtm_prior_coverage` | 已做过的目标 SDTM 数量 / 目标 SDTM 总数。 |
+| `overall_prior_coverage` | 有任务内容的 TLF、ADaM、SDTM 三类覆盖率的平均值。 |
+| `tlf_unseen_count` | 目标中从未在此人历史出现过的 TLF 数量。 |
+| `adam_unseen_count` | 目标中从未出现过的 ADaM 数量。 |
+| `sdtm_unseen_count` | 目标中从未出现过的 SDTM 数量。 |
+
+### 8.4 单个历史 DID 的最高相似度（7 个）
+
+| 特征 | 含义 |
+|---|---|
+| `max_tlf_similarity` | 与任一历史 DID 的最高 TLF 精确名称集合相似度。 |
+| `max_tlf_semantic_similarity` | 与任一历史 DID 的最高 TLF 标题近似相似度。 |
+| `max_tlf_semantic_coverage` | 任一历史 DID 对目标 TLF 的最高标题近似覆盖率。 |
+| `max_adam_similarity` | 与任一历史 DID 的最高 ADaM 精确名称集合相似度。 |
+| `max_sdtm_similarity` | 与任一历史 DID 的最高 SDTM 精确名称集合相似度。 |
+| `max_overall_similarity` | 与任一历史 DID 的最高 TLF/ADaM/SDTM 精确相似度平均值。 |
+| `max_combined_similarity` | 最相似历史 DID 的综合相似度，即精确集合相似度和 TLF 标题近似相似度的平均。 |
+
+### 8.5 重复相似工作与学习趋势（8 个）
+
+| 特征 | 含义 |
+|---|---|
+| `top3_combined_similarity_mean` | 相似度最高 3 个历史 DID 的综合相似度平均值。 |
+| `top5_combined_similarity_mean` | 相似度最高 5 个历史 DID 的综合相似度平均值。 |
+| `similar_did_count_ge_70` | 综合相似度至少 0.70 的历史 DID 数量。 |
+| `similar_did_count_ge_85` | 综合相似度至少 0.85 的高度相似历史 DID 数量。 |
+| `weighted_similar_hours` | 综合相似度至少 0.70 的历史 DID 实际工时，以相似度为权重的平均值。 |
+| `weighted_similar_hours_per_task` | 同一批相似 DID 的每任务实际工时加权平均值。 |
+| `latest_similar_hours` | 最近完成的相似 DID（相似度至少 0.70）的实际工时。 |
+| `similar_hours_trend` | 相似 DID 按实际交付日期排列后，工时的线性趋势；负数表示历史上越做越快，正数表示工时增加。 |
+
+### 8.6 相似任务的时间间隔（1 个）
+
+| 特征 | 含义 |
+|---|---|
+| `days_since_similar_work` | 目标日期距离最相似历史 DID 完成日期的天数；若没有任何相似历史，使用较大的默认值。 |
+
+### 8.7 任务背景类别（4 个）
+
+以下字段经过 One-Hot Encoding 后输入 Ridge，使模型能学习不同任务背景的系统性差异：
+
+| 特征 | 含义 |
+|---|---|
+| `ta` | Therapeutic Area，例如 Oncology、Vaccines。 |
+| `study_type` | Study 的类型。 |
+| `reporting_event` | 报告/交付事件类型。 |
+| `draft_or_final` | Draft 或 Final 状态。 |
+
+### 8.8 不属于 Ridge 输入、但影响最终输出的 v3 策略
+
+以下不是新增的回归特征，但会影响最终 P50：
+
+- `person_history_baseline`：人员历史工时中位数；无个人历史时回退为全局中位数；
+- `ridge_weight` / `baseline_weight`：由校准集自动选择的 Ridge 与个人基准融合比例；
+- `offset_hours`：由校准集选择的残差偏移；
+- `cap_hours`：由训练标签分位数得到的预测上限，避免不合理的极端外推；
+- `upper_adjustments.p80` / `upper_adjustments.p90`：在校准集计算的上界补偿，用于从 P50 生成 P80/P90。
+
+## 9. 模型效果对比
 
 以下版本均使用 32,705 条合格记录、相同时间切分：
 
@@ -293,7 +395,7 @@ robust_blend              v3 正式预测
 | P80 Coverage | 81.13% | 81.35% | 81.01% | **80.56%** |
 | P90 Coverage | 91.96% | 91.94% | 91.69% | **91.98%** |
 
-### 8.1 如何解读
+### 9.1 如何解读
 
 - MAE：平均每条 Person-DID 相差多少小时，越低越好；
 - Median AE：普通案例的典型误差，越低越好；
@@ -311,7 +413,7 @@ RMSE：140.26 -> 67.97小时
 
 这表明 v3 显著减少了少量异常预测对整体结果的破坏。
 
-## 9. 当前推荐使用方式
+## 10. 当前推荐使用方式
 
 对于单个 Planned/Ongoing DID：
 
@@ -332,9 +434,9 @@ model_version: did-effort-ridge-v3-robust
 artifacts/did_effort_model_v2_fast_backup.joblib
 ```
 
-## 10. 当前局限和后续建议
+## 11. 当前局限和后续建议
 
-### 10.1 当前局限
+### 11.1 当前局限
 
 1. `TIME_ON` 是 DID 汇总工时，可能包含会议、返工或管理性工作；
 2. 未完全区分 Generation 与 QC 的实际工时；
@@ -343,7 +445,7 @@ artifacts/did_effort_model_v2_fast_backup.joblib
 5. 真实超高工时项目可能被 v3 上限低估；
 6. Bias 仍为负，说明整体仍需关注低估风险。
 
-### 10.2 推荐下一步
+### 11.2 推荐下一步
 
 1. 自动生成异常工时和任务数量矛盾清单，供业务核查；
 2. 对确认的数据错误建立排除名单，而不是仅因工时大就自动删除；
@@ -352,6 +454,6 @@ artifacts/did_effort_model_v2_fast_backup.joblib
 5. 对高工时 DID 研究独立的风险分类或两阶段模型；
 6. 建立“候选模型与当前正式模型”自动晋级比较机制。
 
-## 11. 汇报时可使用的一句话总结
+## 12. 汇报时可使用的一句话总结
 
 > 我们已将 DID 个人工时预测从基于任务数量和精确名称匹配的基础模型，升级为能够识别近似任务、重复经验、多个历史 DID 的组合覆盖，并自动抑制极端外推的稳健模型。在独立时间测试集上，WAPE 从 87.27% 降至 71.30%，RMSE 从 164.28 小时降至 67.97 小时；目前适合作为资源规划和风险预留的辅助决策工具，而不应替代业务专家对异常项目的判断。
