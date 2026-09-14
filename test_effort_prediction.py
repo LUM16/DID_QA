@@ -13,9 +13,11 @@ from effort_prediction import (
     TARGET_QUERY,
     TRAINING_QUERY,
     _apply_prediction_policy,
+    _is_lfs_pointer,
     _load_similarity_cache,
     _save_similarity_cache,
     _select_prediction_policy,
+    _select_person_name,
     _similarity_candidates,
     _tlf_semantic_similarity,
     _title_similarity,
@@ -69,6 +71,39 @@ def make_record(index: int, person: str = "Person A") -> dict:
 
 
 class EffortPredictionTests(unittest.TestCase):
+    def test_person_name_resolution_accepts_ordering_and_unique_aliases(self) -> None:
+        candidates = (
+            "Lu, Manman",
+            "Chen, Zhenchao (Riven)",
+            "Zhou, Feifeng",
+        )
+
+        self.assertEqual(
+            _select_person_name("Manman Lu", candidates), "Lu, Manman"
+        )
+        self.assertEqual(
+            _select_person_name("Riven", candidates), "Chen, Zhenchao (Riven)"
+        )
+        self.assertEqual(
+            _select_person_name("feifeng zhou", candidates), "Zhou, Feifeng"
+        )
+
+    def test_person_name_resolution_rejects_ambiguous_aliases(self) -> None:
+        with self.assertRaisesRegex(ValueError, "ambiguous"):
+            _select_person_name(
+                "Manman", ("Lu, Manman (Manman)", "Wang, Manman (Manman)")
+            )
+
+    def test_lfs_pointer_is_not_treated_as_a_model(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            pointer_path = Path(directory) / "model.joblib"
+            pointer_path.write_bytes(
+                b"version https://git-lfs.github.com/spec/v1\n"
+                b"oid sha256:example\nsize 123\n"
+            )
+
+            self.assertTrue(_is_lfs_pointer(pointer_path))
+
     def test_title_similarity_matches_reworded_tlf_titles(self) -> None:
         similar = _title_similarity(
             "Summary of Treatment-Emergent Adverse Events",

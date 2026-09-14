@@ -6,14 +6,17 @@ import argparse
 import hashlib
 import json
 import math
+import os
 import re
 import sys
+import tempfile
 from datetime import date, datetime
 from functools import lru_cache
 from itertools import groupby
 from pathlib import Path
 from statistics import median
 from typing import Any, Iterable
+from urllib.request import Request, urlopen
 
 import joblib
 import numpy as np
@@ -36,6 +39,14 @@ DEFAULT_SIMILARITY_CACHE_PATH = (
     / "artifacts"
     / "did_effort_similarity_cache.joblib"
 )
+GITHUB_ARTIFACT_BASE_URL = (
+    "https://media.githubusercontent.com/media/LUM16/DID_QA/main/artifacts"
+)
+DEFAULT_MODEL_URL = f"{GITHUB_ARTIFACT_BASE_URL}/did_effort_model.joblib"
+DEFAULT_SIMILARITY_CACHE_URL = (
+    f"{GITHUB_ARTIFACT_BASE_URL}/did_effort_similarity_cache.joblib"
+)
+LFS_POINTER_PREFIX = b"version https://git-lfs.github.com/spec/v1"
 TLF_SEMANTIC_MATCH_THRESHOLD = 0.70
 SIMILARITY_CACHE_VERSION = "tlf-char-wb-3-5-greedy-0.70-v1"
 RECENT_CANDIDATE_LIMIT = 50
@@ -201,6 +212,12 @@ RETURN p.Name AS person, d.DID AS did, s.Name AS study,
 ORDER BY completion_date, did, person
 """
 
+PERSON_NAMES_QUERY = """
+MATCH (p:Person)
+WHERE p.Name IS NOT NULL
+RETURN DISTINCT p.Name AS person
+"""
+
 TRAINING_PEOPLE_QUERY = """
 MATCH (p:Person)-[:WORKS_ON]->(d:Delivery)
 WHERE toLower(toString(d.DID_Status)) = 'completed'
@@ -325,12 +342,69 @@ def load_training_records() -> list[dict[str, Any]]:
     return records
 
 
+def _name_tokens(value: Any) -> frozenset[str]:
+    return frozenset(re.findall(r"[A-Z0-9]+", str(value or "").upper()))
+
+
+def _select_person_name(person: str, candidates: Iterable[str]) -> str:
+    """Resolve harmless punctuation, ordering, and parenthesized-alias differences."""
+    requested_normalized = _normalized_name(person)
+    requested_tokens = _name_tokens(person)
+    matches = [
+        candidate
+        for candidate in candidates
+        if isinstance(candidate, str) and candidate.strip()
+    ]
+    exact = [
+        candidate
+        for candidate in matches
+        if _normalized_name(candidate) == requested_normalized
+    ]
+    if len(exact) == 1:
+        return exact[0]
+    token_exact = [
+        candidate for candidate in matches if _name_tokens(candidate) == requested_tokens
+    ]
+    if len(token_exact) == 1:
+        return token_exact[0]
+    alias_matches = [
+        candidate
+        for candidate in matches
+        if requested_tokens and requested_tokens < _name_tokens(candidate)
+    ]
+    if len(alias_matches) == 1:
+        return alias_matches[0]
+    if len(alias_matches) > 1 or len(exact) > 1 or len(token_exact) > 1:
+        options = sorted(set(alias_matches or token_exact or exact))
+        raise ValueError(
+            f"Person name {person!r} is ambiguous. Please use one of: "
+            f"{', '.join(options[:10])}."
+        )
+    raise ValueError(f"No Person record matches {person!r}.")
+
+
+@lru_cache(maxsize=1)
+def _available_person_names() -> tuple[str, ...]:
+    return tuple(
+        str(row["person"])
+        for row in _read_query(PERSON_NAMES_QUERY)
+        if row.get("person")
+    )
+
+
+def resolve_person_name(person: str) -> str:
+    """Return the unique Neo4j Person.Name matching a flexible user input."""
+    return _select_person_name(person, _available_person_names())
+
+
 def load_target_record(person: str, did: str) -> dict[str, Any]:
     """Load one planned or ongoing Person x DID record."""
-    rows = _read_query(TARGET_QUERY, {"person": person, "did": did})
+    resolved_person = resolve_person_name(person)
+    rows = _read_query(TARGET_QUERY, {"person": resolved_person, "did": did})
     if not rows:
         raise ValueError(
-            f"No Planned/Ongoing WORKS_ON record found for person={person!r}, DID={did!r}."
+            "No Planned/Ongoing WORKS_ON record found for "
+            f"person={resolved_person!r}, DID={did!r}."
         )
     if len(rows) > 1:
         raise ValueError(f"Expected one target record, found {len(rows)}.")
@@ -575,6 +649,68 @@ def _save_similarity_cache(cache: dict[str, Any], path: Path) -> None:
         temporary_path,
     )
     temporary_path.replace(path)
+
+
+def _is_lfs_pointer(path: Path) -> bool:
+    with path.open("rb") as artifact_file:
+        return artifact_file.read(len(LFS_POINTER_PREFIX)) == LFS_POINTER_PREFIX
+
+
+def _prediction_artifact_cache_dir() -> Path:
+    configured = os.environ.get("DID_EFFORT_ARTIFACT_CACHE_DIR")
+    cache_dir = (
+        Path(configured)
+        if configured
+        else Path(tempfile.gettempdir()) / "did_qa_effort_artifacts"
+    )
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    return cache_dir
+
+
+def _download_prediction_artifact(url: str, destination: Path) -> Path:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = destination.with_suffix(destination.suffix + ".download")
+    headers = {"User-Agent": "did-qa-effort-prediction"}
+    github_token = os.environ.get("GITHUB_TOKEN")
+    if github_token:
+        headers["Authorization"] = f"Bearer {github_token}"
+    try:
+        with urlopen(Request(url, headers=headers), timeout=60) as response:
+            with temporary_path.open("wb") as artifact_file:
+                while chunk := response.read(1024 * 1024):
+                    artifact_file.write(chunk)
+        if _is_lfs_pointer(temporary_path):
+            raise ValueError(
+                f"GitHub returned an LFS pointer instead of artifact data from {url}."
+            )
+        temporary_path.replace(destination)
+    finally:
+        if temporary_path.exists():
+            temporary_path.unlink()
+    return destination
+
+
+def _resolve_prediction_artifact(
+    path: Path, default_path: Path, url_environment_variable: str, default_url: str
+) -> Path:
+    resolved_path = path.resolve()
+    if resolved_path.exists() and not _is_lfs_pointer(resolved_path):
+        return resolved_path
+    if resolved_path != default_path.resolve():
+        raise FileNotFoundError(f"Effort prediction artifact not found: {resolved_path}.")
+    cached_path = _prediction_artifact_cache_dir() / default_path.name
+    if cached_path.exists() and not _is_lfs_pointer(cached_path):
+        return cached_path
+    return _download_prediction_artifact(
+        os.environ.get(url_environment_variable, default_url), cached_path
+    )
+
+
+@lru_cache(maxsize=2)
+def _load_prediction_similarity_cache(
+    path_string: str, modified_at_ns: int
+) -> dict[str, Any]:
+    return _load_similarity_cache(Path(path_string))
 
 
 def _cached_tlf_semantic_similarity(
@@ -1311,7 +1447,10 @@ def train_model(
 
 
 def predict_record(
-    target: dict[str, Any], model_path: Path, as_of_date: str | None = None
+    target: dict[str, Any],
+    model_path: Path,
+    as_of_date: str | None = None,
+    similarity_cache_path: Path | None = None,
 ) -> dict[str, Any]:
     """Predict total effort for one normalized target record."""
     resolved_model_path = model_path.resolve()
@@ -1339,7 +1478,15 @@ def predict_record(
         for row in artifact["history"]
         if _as_date(row["completion_date"]) < _as_date(target["as_of_date"])
     ]
-    feature, similar = build_feature_row(target, history)
+    similarity_cache = (
+        _load_prediction_similarity_cache(
+            str(similarity_cache_path.resolve()),
+            similarity_cache_path.stat().st_mtime_ns,
+        )
+        if similarity_cache_path is not None
+        else None
+    )
+    feature, similar = build_feature_row(target, history, similarity_cache)
     raw_prediction = _predict_hours(artifact["model"], [feature])
     p50 = float(
         _apply_prediction_policy(
@@ -1401,10 +1548,23 @@ def predict_effort(
     as_of_date: str | None = None,
 ) -> dict[str, Any]:
     """Load a target from Neo4j and forecast it; intended for Agent tool wiring."""
+    resolved_model_path = _resolve_prediction_artifact(
+        model_path,
+        DEFAULT_MODEL_PATH,
+        "DID_EFFORT_MODEL_URL",
+        DEFAULT_MODEL_URL,
+    )
+    resolved_similarity_cache_path = _resolve_prediction_artifact(
+        DEFAULT_SIMILARITY_CACHE_PATH,
+        DEFAULT_SIMILARITY_CACHE_PATH,
+        "DID_EFFORT_SIMILARITY_CACHE_URL",
+        DEFAULT_SIMILARITY_CACHE_URL,
+    )
     return predict_record(
         load_target_record(person, did),
-        model_path=model_path,
+        model_path=resolved_model_path,
         as_of_date=as_of_date,
+        similarity_cache_path=resolved_similarity_cache_path,
     )
 
 

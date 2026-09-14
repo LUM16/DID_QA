@@ -102,6 +102,27 @@ cached model and computes P50/P80/P90; the LLM does not calculate or alter
 prediction values. Ordinary historical-hours and Neo4j questions continue
 through the existing read-only Text-to-Cypher flow.
 
+### RSC model artifact loading
+
+The v3 model and similarity cache are tracked in GitHub with Git LFS. Git-backed
+RSC deployments may receive only their small LFS pointer files. On the first
+prediction request, the app detects that condition and downloads both artifacts
+from this repository's `main` branch to a writable local cache. Later requests
+reuse the cached copies within that RSC runtime.
+
+The default artifact URLs work for this repository. These optional RSC Vars can
+override them or configure a private repository:
+
+- `DID_EFFORT_MODEL_URL`
+- `DID_EFFORT_SIMILARITY_CACHE_URL`
+- `DID_EFFORT_ARTIFACT_CACHE_DIR`
+- `GITHUB_TOKEN` (only when the artifact URLs require authentication)
+
+Person input is matched against Neo4j names without requiring exact punctuation
+or name order. A unique parenthesized alias is also accepted, such as `Riven`
+for `Chen, Zhenchao (Riven)`. Ambiguous short names produce an explicit error
+instead of selecting an arbitrary person.
+
 Important limitations:
 
 - The label is total recorded hands-on hours, not calendar duration.
@@ -169,6 +190,8 @@ From the **Connect server**, these must be reachable:
 1. Neo4j Bolt: `10.109.17.64:7687`
 2. Vox token: `https://prodfederate.pfizer.com`
 3. Vox API: `https://mule4api-comm-amer.pfizer.com`
+4. GitHub artifact URL: `https://media.githubusercontent.com` (needed on the
+   first effort-prediction request when RSC did not fetch Git LFS objects)
 
 If schema load fails after publish, it is almost always firewall / routing between RSC and Neo4j.
 
