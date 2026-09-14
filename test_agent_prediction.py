@@ -43,6 +43,42 @@ PREDICTION = {
 
 
 class AgentPredictionTests(unittest.TestCase):
+    def test_prediction_context_fills_missing_person_or_did(self) -> None:
+        history = [{"role": "assistant", "content": "Prior prediction", "prediction": PREDICTION}]
+
+        did_only, did_only_usage = agent.extract_effort_prediction_parameters(
+            "预测 C5001001_60", history
+        )
+        person_only, person_only_usage = agent.extract_effort_prediction_parameters(
+            "预测 Riven", history
+        )
+        reference, reference_usage = agent.extract_effort_prediction_parameters(
+            "这个 DID 需要多久？", history
+        )
+
+        self.assertEqual(did_only["person"], "Chen, Zhenchao (Riven)")
+        self.assertEqual(did_only["did"], "C5001001_60")
+        self.assertEqual(person_only["person"], "Riven")
+        self.assertEqual(person_only["did"], "C5001001_59")
+        self.assertEqual(reference["person"], "Chen, Zhenchao (Riven)")
+        self.assertEqual(reference["did"], "C5001001_59")
+        self.assertEqual(did_only_usage["total_tokens"], 0)
+        self.assertEqual(person_only_usage["total_tokens"], 0)
+        self.assertEqual(reference_usage["total_tokens"], 0)
+
+    @patch("agent.predict_effort", return_value=PREDICTION)
+    def test_contextual_did_replacement_routes_without_llm(self, mock_predict) -> None:
+        history = [{"role": "assistant", "content": "Prior prediction", "prediction": PREDICTION}]
+
+        result = agent.ask("换成 C5001001_60", history=history)
+
+        mock_predict.assert_called_once_with(
+            person="Chen, Zhenchao (Riven)",
+            did="C5001001_60",
+            as_of_date="2026-09-11",
+        )
+        self.assertEqual(result["usage"]["total_tokens"], 0)
+
     def test_prediction_intent_does_not_match_historical_hours(self) -> None:
         self.assertTrue(
             agent._is_effort_prediction_question(

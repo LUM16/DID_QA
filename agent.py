@@ -64,6 +64,24 @@ EFFORT_PREDICTION_PATTERNS = (
 )
 DID_PATTERN = re.compile(r"\b[A-Za-z][A-Za-z0-9-]*_\d+\b")
 ISO_DATE_PATTERN = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
+PERSON_REFERENCE_PATTERN = re.compile(
+    r"^(?:他|她|这个人|该人员|上述人员|上面的人|那个人|"
+    r"this person|that person|the same person|him|her|them)$",
+    re.IGNORECASE,
+)
+PERSON_REFERENCE_TEXT_PATTERN = re.compile(
+    r"(?:他|她|这个人|该人员|上述人员|上面的人|那个人|"
+    r"this\s+person|that\s+person|the same person|\bhim\b|\bher\b|\bthem\b)",
+    re.IGNORECASE,
+)
+DID_REFERENCE_PATTERN = re.compile(
+    r"(?:这个\s*did|该\s*did|上述\s*did|上一个\s*did|"
+    r"this\s+did|that\s+did|the same did)",
+    re.IGNORECASE,
+)
+DID_ONLY_PREFIX_PATTERN = re.compile(
+    r"^(?:换成|改成|改为|使用|用|switch to|change to)$", re.IGNORECASE
+)
 
 
 def _extract_cypher(text: str) -> str:
@@ -77,10 +95,43 @@ def _extract_cypher(text: str) -> str:
     raise ValueError(f"Could not parse Cypher from model output:\n{text}")
 
 
-def _is_effort_prediction_question(question: str) -> bool:
-    return any(
+def _latest_prediction_context(
+    history: list[dict[str, Any]] | None,
+) -> dict[str, str | None] | None:
+    for message in reversed(history or []):
+        prediction = message.get("prediction")
+        if not isinstance(prediction, dict):
+            continue
+        person = prediction.get("person")
+        did = prediction.get("did")
+        if isinstance(person, str) and person.strip() and isinstance(did, str) and did.strip():
+            as_of_date = prediction.get("as_of_date")
+            return {
+                "person": person.strip(),
+                "did": did.strip(),
+                "as_of_date": (
+                    as_of_date.strip()
+                    if isinstance(as_of_date, str) and as_of_date.strip()
+                    else None
+                ),
+            }
+    return None
+
+
+def _is_effort_prediction_question(
+    question: str, history: list[dict[str, Any]] | None = None
+) -> bool:
+    if any(
         re.search(pattern, question, re.IGNORECASE)
         for pattern in EFFORT_PREDICTION_PATTERNS
+    ):
+        return True
+    return bool(
+        _latest_prediction_context(history)
+        and DID_PATTERN.search(question)
+        and DID_ONLY_PREFIX_PATTERN.search(
+            question[: DID_PATTERN.search(question).start()].strip(" ,，:：")
+        )
     )
 
 
@@ -100,51 +151,86 @@ def _extract_json_object(text: str) -> dict[str, Any]:
 
 
 def _extract_effort_parameters_locally(
-    question: str,
+    question: str, history: list[dict[str, Any]] | None = None
 ) -> dict[str, str | None] | None:
+    context = _latest_prediction_context(history)
     did_match = DID_PATTERN.search(question)
-    if not did_match:
-        return None
+    date_match = ISO_DATE_PATTERN.search(question)
+    as_of_date = date_match.group(0) if date_match else (
+        context["as_of_date"] if context else None
+    )
+    if did_match:
+        prefix = question[: did_match.start()].strip(" ,，:：")
+        prefix = re.sub(
+            r"^(?:请|请帮我|帮我)?\s*(?:预测|预计|预估|估算)\s*",
+            "",
+            prefix,
+            flags=re.IGNORECASE,
+        )
+        prefix = re.sub(
+            r"^(?:please\s+)?(?:predict|forecast|estimate)\s+",
+            "",
+            prefix,
+            flags=re.IGNORECASE,
+        )
+        person = re.sub(
+            r"(?:的)?\s*(?:完成|做|负责|对于|对)\s*$",
+            "",
+            prefix,
+            flags=re.IGNORECASE,
+        )
+        person = re.sub(
+            r"(?:'s|’s)?\s*(?:total\s+)?(?:effort|hours?|time)?\s*(?:for|on)\s*$",
+            "",
+            person,
+            flags=re.IGNORECASE,
+        ).strip(" ,，:：'\"")
+        if not person or PERSON_REFERENCE_PATTERN.fullmatch(person) or DID_ONLY_PREFIX_PATTERN.fullmatch(person):
+            person = context["person"] if context else ""
+        if not person:
+            return None
+        return {
+            "person": person,
+            "did": did_match.group(0),
+            "as_of_date": as_of_date,
+        }
 
-    prefix = question[: did_match.start()].strip(" ,，:：")
-    prefix = re.sub(
+    if not context:
+        return None
+    if PERSON_REFERENCE_TEXT_PATTERN.search(question) or DID_REFERENCE_PATTERN.search(question):
+        return {**context, "as_of_date": as_of_date}
+
+    person = re.sub(
         r"^(?:请|请帮我|帮我)?\s*(?:预测|预计|预估|估算)\s*",
         "",
-        prefix,
+        question,
         flags=re.IGNORECASE,
     )
-    prefix = re.sub(
+    person = re.sub(
         r"^(?:please\s+)?(?:predict|forecast|estimate)\s+",
         "",
-        prefix,
+        person,
         flags=re.IGNORECASE,
     )
     person = re.sub(
-        r"(?:的)?\s*(?:完成|做|负责|对于|对)\s*$",
-        "",
-        prefix,
-        flags=re.IGNORECASE,
-    )
-    person = re.sub(
-        r"(?:'s|’s)?\s*(?:total\s+)?(?:effort|hours?|time)?\s*(?:for|on)\s*$",
+        r"(?:的)?\s*(?:工时|时间|小时|effort|hours?|time)?\s*[。！？?]*$",
         "",
         person,
         flags=re.IGNORECASE,
     ).strip(" ,，:：'\"")
-    if not person:
+    if not person or PERSON_REFERENCE_PATTERN.fullmatch(person):
         return None
-    date_match = ISO_DATE_PATTERN.search(question)
     return {
         "person": person,
-        "did": did_match.group(0),
-        "as_of_date": date_match.group(0) if date_match else None,
+        "did": context["did"],
+        "as_of_date": as_of_date,
     }
 
 
 def extract_effort_prediction_parameters(
-    question: str, history: list[dict[str, str]] | None = None
+    question: str, history: list[dict[str, Any]] | None = None
 ) -> tuple[dict[str, str | None], dict[str, int]]:
-    local_parameters = _extract_effort_parameters_locally(question)
+    local_parameters = _extract_effort_parameters_locally(question, history)
     if local_parameters:
         return local_parameters, empty_usage()
 
@@ -305,7 +391,7 @@ def _format_effort_prediction(
 
 
 def answer_effort_prediction(
-    question: str, history: list[dict[str, str]] | None = None
+    question: str, history: list[dict[str, Any]] | None = None
 ) -> dict[str, Any]:
     parameters, usage = extract_effort_prediction_parameters(question, history)
     prediction = predict_effort(
@@ -506,9 +592,13 @@ def _needs_repair(question: str, rows: list[dict[str, Any]], cypher: str) -> boo
     return "optional match" in cypher.lower() and "where" in cypher.lower()
 
 
-def ask(question: str, history: list[dict[str, str]] | None = None, schema: dict[str, Any] | None = None) -> dict[str, Any]:
+def ask(
+    question: str,
+    history: list[dict[str, Any]] | None = None,
+    schema: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     load_env()
-    if _is_effort_prediction_question(question):
+    if _is_effort_prediction_question(question, history):
         try:
             result = answer_effort_prediction(question, history)
             result["schema"] = schema

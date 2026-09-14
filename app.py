@@ -127,7 +127,14 @@ if prompt:
     with st.chat_message("assistant"):
         with st.spinner("Querying Neo4j…"):
             history = [
-                {"role": m["role"], "content": m["content"]}
+                {
+                    **{"role": m["role"], "content": m["content"]},
+                    **(
+                        {"prediction": m["prediction"]}
+                        if m.get("prediction")
+                        else {}
+                    ),
+                }
                 for m in st.session_state.messages[:-1]
             ]
             try:
@@ -145,7 +152,13 @@ if prompt:
                     f"(prompt {usage.get('prompt_tokens', 0)} · completion {usage.get('completion_tokens', 0)})"
                 )
                 st.session_state.messages.append(
-                    {"role": "assistant", "content": answer, "cypher": cypher, "usage": usage}
+                    {
+                        "role": "assistant",
+                        "content": answer,
+                        "cypher": cypher,
+                        "usage": usage,
+                        "prediction": result.get("prediction"),
+                    }
                 )
             except Exception as exc:  # noqa: BLE001
                 err = f"Something went wrong: {exc}"
