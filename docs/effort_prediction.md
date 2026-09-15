@@ -477,11 +477,7 @@ TLF 语义匹配结果按目标/历史 TLF 清单的内容哈希保存到
 tlf_prior_overlap_count
 adam_prior_overlap_count
 sdtm_prior_overlap_count
-py .\effort_prediction.py predict `
-  --model .\artifacts\did_effort_model.joblib `
-  --person "FEN, HANRONG" `
-  --did "A3921210_42" `
-  --as-of-date "2026-09-14"
+tlf_prior_coverage
 adam_prior_coverage
 sdtm_prior_coverage
 overall_prior_coverage
