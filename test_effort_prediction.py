@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 import tempfile
 import unittest
 from datetime import date, timedelta
@@ -13,6 +14,7 @@ import numpy as np
 from effort_prediction import (
     TARGET_QUERY,
     TRAINING_QUERY,
+    ONGOING_ASSIGNMENTS_QUERY,
     _apply_prediction_policy,
     _is_lfs_pointer,
     _load_similarity_cache,
@@ -25,6 +27,7 @@ from effort_prediction import (
     build_feature_row,
     build_training_features,
     clean_training_records,
+    export_ongoing_predictions,
     person_name_candidates,
     predict_record,
     quality_report,
@@ -150,6 +153,11 @@ class EffortPredictionTests(unittest.TestCase):
             self.assertIn("wo.CSR_SDTM_Num_Total", query)
             self.assertIn("(item:ADaM)", query)
             self.assertNotIn("(item:ADAM)", query)
+        self.assertIn("WHERE p.Name = $person", TARGET_QUERY)
+
+    def test_ongoing_assignments_query_excludes_planned_deliveries(self) -> None:
+        self.assertIn("DID_Status)) = 'ongoing'", ONGOING_ASSIGNMENTS_QUERY)
+        self.assertNotIn("'planned'", ONGOING_ASSIGNMENTS_QUERY)
 
     def test_features_only_use_strictly_earlier_history(self) -> None:
         previous = make_record(0)
@@ -325,6 +333,62 @@ class EffortPredictionTests(unittest.TestCase):
         self.assertIn("similar_hours_trend", result["similarity_features"])
         self.assertIn("overall_prior_coverage", result["similarity_features"])
         self.assertIn("ridge_weight", result["prediction_policy"])
+
+    def test_export_ongoing_predictions_writes_one_snapshot_per_assignment(self) -> None:
+        target = make_record(31, "Person A")
+        target.pop("completion_date")
+        target["planned_date"] = "2026-02-01"
+        prediction = {
+            "person": "Person A",
+            "did": "DID-031",
+            "study": "STUDY-15",
+            "as_of_date": "2026-01-15",
+            "model_version": "did-effort-ridge-v3-robust",
+            "p50_hours": 10.0,
+            "p80_hours": 15.0,
+            "p90_hours": 20.0,
+            "person_completed_did_count": 8,
+            "similarity_features": {
+                "similar_did_count_ge_70": 3,
+                "similar_did_count_ge_85": 1,
+                "overall_prior_coverage": 0.75,
+            },
+            "warnings": [],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            output_path = Path(directory) / "ongoing.csv"
+            with patch(
+                "effort_prediction._resolve_prediction_artifact",
+                side_effect=lambda path, *_: path,
+            ), patch(
+                "effort_prediction.load_ongoing_assignments",
+                return_value=[{"person": "Person A", "did": "DID-031"}],
+            ), patch(
+                "effort_prediction._load_target_record_for_exact_person",
+                return_value=target,
+            ), patch(
+                "effort_prediction.predict_record", return_value=prediction
+            ), patch(
+                "effort_prediction._load_prediction_similarity_cache",
+                return_value={
+                    "entries": {},
+                    "hits": 0,
+                    "misses": 0,
+                },
+            ) as load_cache, patch(
+                "effort_prediction._save_similarity_cache"
+            ):
+                result = export_ongoing_predictions(
+                    output_path, Path(directory) / "model.joblib", "2026-01-15"
+                )
+            with output_path.open(encoding="utf-8-sig", newline="") as output_file:
+                rows = list(csv.DictReader(output_file))
+
+        self.assertEqual(result["ongoing_assignments"], 1)
+        self.assertEqual(rows[0]["person"], "Person A")
+        self.assertEqual(rows[0]["p90_hours"], "20.0")
+        self.assertEqual(rows[0]["planned_date"], "2026-02-01")
+        self.assertEqual(load_cache.call_count, 1)
 
 if __name__ == "__main__":
     unittest.main()

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 from difflib import SequenceMatcher
 import hashlib
 import json
@@ -229,10 +230,7 @@ ORDER BY person
 
 TARGET_QUERY = """
 MATCH (p:Person)-[wo:WORKS_ON]->(d:Delivery)
-WHERE replace(toUpper(toString(p.Name)), ' ', '') =
-      replace(toUpper($person), ' ', '')
-   OR replace(toUpper(toString(p.Name)), ' ', '') CONTAINS
-      replace(toUpper($person), ' ', '')
+WHERE p.Name = $person
 WITH p, wo, d
 WHERE toString(d.DID) = toString($did)
   AND toLower(toString(d.DID_Status)) IN ['planned', 'ongoing']
@@ -305,6 +303,15 @@ RETURN p.Name AS person, d.DID AS did, s.Name AS study,
        d.Draft_or_Final AS draft_or_final,
        tlfs, adams, sdtms,
        workOnRelCount AS work_on_rel_count
+"""
+
+ONGOING_ASSIGNMENTS_QUERY = """
+MATCH (p:Person)-[:WORKS_ON]->(d:Delivery)
+WHERE toLower(toString(d.DID_Status)) = 'ongoing'
+  AND p.Name IS NOT NULL
+  AND d.DID IS NOT NULL
+RETURN DISTINCT p.Name AS person, d.DID AS did
+ORDER BY did, person
 """
 
 
@@ -423,11 +430,16 @@ def person_name_candidates(query: str, limit: int = 12) -> list[str]:
 def load_target_record(person: str, did: str) -> dict[str, Any]:
     """Load one planned or ongoing Person x DID record."""
     resolved_person = resolve_person_name(person)
-    rows = _read_query(TARGET_QUERY, {"person": resolved_person, "did": did})
+    return _load_target_record_for_exact_person(resolved_person, did)
+
+
+def _load_target_record_for_exact_person(person: str, did: str) -> dict[str, Any]:
+    """Load one target for an exact Person.Name value obtained from Neo4j."""
+    rows = _read_query(TARGET_QUERY, {"person": person, "did": did})
     if not rows:
         raise ValueError(
             "No Planned/Ongoing WORKS_ON record found for "
-            f"person={resolved_person!r}, DID={did!r}."
+            f"person={person!r}, DID={did!r}."
         )
     if len(rows) > 1:
         raise ValueError(f"Expected one target record, found {len(rows)}.")
@@ -1592,6 +1604,116 @@ def predict_effort(
     )
 
 
+def load_ongoing_assignments() -> list[dict[str, str]]:
+    """Return the assigned Person x DID pairs that are currently ongoing."""
+    return [
+        {"person": str(row["person"]), "did": str(row["did"])}
+        for row in _read_query(ONGOING_ASSIGNMENTS_QUERY)
+        if row.get("person") and row.get("did")
+    ]
+
+
+def export_ongoing_predictions(
+    output_path: Path,
+    model_path: Path = DEFAULT_MODEL_PATH,
+    as_of_date: str | None = None,
+) -> dict[str, Any]:
+    """Write a point-in-time CSV forecast for every assigned ongoing DID."""
+    prediction_date = as_of_date or date.today().isoformat()
+    generated_at = datetime.now().astimezone().isoformat()
+    resolved_model_path = _resolve_prediction_artifact(
+        model_path,
+        DEFAULT_MODEL_PATH,
+        "DID_EFFORT_MODEL_URL",
+        DEFAULT_MODEL_URL,
+    )
+    resolved_similarity_cache_path = _resolve_prediction_artifact(
+        DEFAULT_SIMILARITY_CACHE_PATH,
+        DEFAULT_SIMILARITY_CACHE_PATH,
+        "DID_EFFORT_SIMILARITY_CACHE_URL",
+        DEFAULT_SIMILARITY_CACHE_URL,
+    )
+    cache_modified_at_ns = resolved_similarity_cache_path.stat().st_mtime_ns
+    similarity_cache = _load_prediction_similarity_cache(
+        str(resolved_similarity_cache_path), cache_modified_at_ns
+    )
+    fieldnames = [
+        "predicted_at",
+        "as_of_date",
+        "model_version",
+        "person",
+        "did",
+        "study",
+        "planned_date",
+        "p50_hours",
+        "p80_hours",
+        "p90_hours",
+        "person_completed_did_count",
+        "similar_did_count_ge_70",
+        "similar_did_count_ge_85",
+        "overall_prior_coverage",
+        "warnings",
+    ]
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    assignments = load_ongoing_assignments()
+    with output_path.open("w", encoding="utf-8-sig", newline="") as output_file:
+        writer = csv.DictWriter(output_file, fieldnames=fieldnames)
+        writer.writeheader()
+        for assignment in assignments:
+            target = _load_target_record_for_exact_person(
+                assignment["person"], assignment["did"]
+            )
+            prediction = predict_record(
+                target,
+                model_path=resolved_model_path,
+                as_of_date=prediction_date,
+                similarity_cache_path=resolved_similarity_cache_path,
+            )
+            similarity = prediction["similarity_features"]
+            writer.writerow(
+                {
+                    "predicted_at": generated_at,
+                    "as_of_date": prediction["as_of_date"],
+                    "model_version": prediction["model_version"],
+                    "person": prediction["person"],
+                    "did": prediction["did"],
+                    "study": prediction["study"],
+                    "planned_date": target.get("planned_date"),
+                    "p50_hours": prediction["p50_hours"],
+                    "p80_hours": prediction["p80_hours"],
+                    "p90_hours": prediction["p90_hours"],
+                    "person_completed_did_count": prediction[
+                        "person_completed_did_count"
+                    ],
+                    "similar_did_count_ge_70": similarity[
+                        "similar_did_count_ge_70"
+                    ],
+                    "similar_did_count_ge_85": similarity[
+                        "similar_did_count_ge_85"
+                    ],
+                    "overall_prior_coverage": similarity[
+                        "overall_prior_coverage"
+                    ],
+                    "warnings": " | ".join(prediction["warnings"]),
+                }
+            )
+    _save_similarity_cache(similarity_cache, resolved_similarity_cache_path)
+    _load_prediction_similarity_cache.cache_clear()
+    return {
+        "output": str(output_path.resolve()),
+        "model_version": MODEL_VERSION,
+        "as_of_date": prediction_date,
+        "generated_at": generated_at,
+        "ongoing_assignments": len(assignments),
+        "similarity_cache": {
+            "path": str(resolved_similarity_cache_path),
+            "entries": len(similarity_cache["entries"]),
+            "hits": similarity_cache["hits"],
+            "misses": similarity_cache["misses"],
+        },
+    }
+
+
 def _load_json_records(path: Path) -> list[dict[str, Any]]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     records = payload.get("records") if isinstance(payload, dict) else payload
@@ -1627,6 +1749,14 @@ def main() -> None:
     predict_parser.add_argument("--did", required=True)
     predict_parser.add_argument("--as-of-date")
 
+    export_ongoing_parser = subparsers.add_parser(
+        "export-ongoing",
+        help="Export V3 forecasts for every assigned ongoing Person x DID.",
+    )
+    export_ongoing_parser.add_argument("--output", type=Path, required=True)
+    export_ongoing_parser.add_argument("--model", type=Path, default=DEFAULT_MODEL_PATH)
+    export_ongoing_parser.add_argument("--as-of-date")
+
     args = parser.parse_args()
     if args.command == "extract":
         records = load_training_records()
@@ -1652,9 +1782,13 @@ def main() -> None:
                 show_progress=True,
             )
         )
-    else:
+    elif args.command == "predict":
         _print_json(
             predict_effort(args.person, args.did, args.model, args.as_of_date)
+        )
+    else:
+        _print_json(
+            export_ongoing_predictions(args.output, args.model, args.as_of_date)
         )
 
 
