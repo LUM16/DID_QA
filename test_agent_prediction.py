@@ -150,6 +150,23 @@ class AgentPredictionTests(unittest.TestCase):
         self.assertEqual(parameters["did"], "C5001001_59")
         self.assertEqual(usage["total_tokens"], 0)
 
+    @patch(
+        "agent._chat",
+        return_value=(
+            '{"person":"Lumanman","did":"C1071007_141","as_of_date":null}',
+            {"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6},
+        ),
+    )
+    def test_did_before_person_uses_llm_parameter_extraction(self, mock_chat) -> None:
+        parameters, usage = agent.extract_effort_prediction_parameters(
+            "predict C1071007_141 hours for Lumamman"
+        )
+
+        mock_chat.assert_called_once()
+        self.assertEqual(parameters["person"], "Lumanman")
+        self.assertEqual(parameters["did"], "C1071007_141")
+        self.assertEqual(usage["total_tokens"], 6)
+
 
 if __name__ == "__main__":
     unittest.main()

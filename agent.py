@@ -214,7 +214,7 @@ def _extract_effort_parameters_locally(
             flags=re.IGNORECASE,
         )
         prefix = re.sub(
-            r"^(?:please\s+)?(?:predict|forecast|estimate)\s+",
+            r"^(?:please\s+)?(?:predict|forecast|estimate)(?:\s+|$)",
             "",
             prefix,
             flags=re.IGNORECASE,
@@ -293,7 +293,14 @@ Rules:
 2. Copy the DID exactly as supplied.
 3. Do not invent missing values.
 4. Use conversation history only to resolve an explicitly referenced prior person or DID.
-5. Do not add markdown or explanation."""
+5. Do not add markdown or explanation.
+Examples:
+- "predict C1071007_141 hours for Lumamman" ->
+  {"person":"Lumanman","did":"C1071007_141","as_of_date":null}
+- "C1071007_141 大概要投入多久？" with a prior prediction for Riven ->
+  {"person":"Riven","did":"C1071007_141","as_of_date":null}
+- "Riven 的工时" with a prior prediction for C1071007_141 ->
+  {"person":"Riven","did":"C1071007_141","as_of_date":null}"""
     user = f"""Conversation history:
 {history_text or '(none)'}
 
