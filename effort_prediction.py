@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from difflib import SequenceMatcher
 import hashlib
 import json
 import math
@@ -395,6 +396,28 @@ def _available_person_names() -> tuple[str, ...]:
 def resolve_person_name(person: str) -> str:
     """Return the unique Neo4j Person.Name matching a flexible user input."""
     return _select_person_name(person, _available_person_names())
+
+
+def person_name_candidates(query: str, limit: int = 12) -> list[str]:
+    """Return likely official Person.Name values for constrained LLM selection."""
+    normalized_query = _normalized_name(query)
+    if not normalized_query:
+        return []
+
+    def score(candidate: str) -> float:
+        normalized_candidate = _normalized_name(candidate)
+        sequence_score = SequenceMatcher(
+            None, normalized_query, normalized_candidate
+        ).ratio()
+        if normalized_query in normalized_candidate:
+            sequence_score += 1.0
+        return sequence_score
+
+    ranked = sorted(
+        ((score(candidate), candidate) for candidate in _available_person_names()),
+        key=lambda item: (-item[0], item[1]),
+    )
+    return [candidate for score, candidate in ranked[:limit] if score >= 0.35]
 
 
 def load_target_record(person: str, did: str) -> dict[str, Any]:

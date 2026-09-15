@@ -8,7 +8,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from effort_prediction import predict_effort
+from effort_prediction import person_name_candidates, predict_effort
 from neo4j_client import get_schema, load_env, run_cypher
 from vox_client import add_usage, chat as _chat, empty_usage
 
@@ -81,6 +81,11 @@ DID_REFERENCE_PATTERN = re.compile(
 )
 DID_ONLY_PREFIX_PATTERN = re.compile(
     r"^(?:那|这个|该|上述|换成|改成|改为|使用|用|switch to|change to)$",
+    re.IGNORECASE,
+)
+NON_NAME_WORD_PATTERN = re.compile(
+    r"\b(?:hour|hours|working|work|effort|time|for|in|on|need|needed|"
+    r"spend|cost|estimate|predict|forecast)\b",
     re.IGNORECASE,
 )
 
@@ -273,11 +278,15 @@ def _extract_effort_parameters_locally(
     }
 
 
+def _is_person_name_candidate(value: str | None) -> bool:
+    return bool(value and not NON_NAME_WORD_PATTERN.search(value))
+
+
 def extract_effort_prediction_parameters(
     question: str, history: list[dict[str, Any]] | None = None
 ) -> tuple[dict[str, str | None], dict[str, int]]:
     local_parameters = _extract_effort_parameters_locally(question, history)
-    if local_parameters:
+    if local_parameters and _is_person_name_candidate(local_parameters["person"]):
         return local_parameters, empty_usage()
 
     history_text = ""
@@ -285,15 +294,19 @@ def extract_effort_prediction_parameters(
         history_text = "\n".join(
             f"{message['role']}: {message['content']}" for message in history[-6:]
         )
+    candidates = person_name_candidates(question)
     system = """Extract parameters for a DID effort prediction request.
 Return exactly one JSON object with these keys:
 {"person": string|null, "did": string|null, "as_of_date": "YYYY-MM-DD"|null}
 Rules:
-1. Copy the person name or nickname exactly as the user supplied it.
-2. Copy the DID exactly as supplied.
-3. Do not invent missing values.
-4. Use conversation history only to resolve an explicitly referenced prior person or DID.
-5. Do not add markdown or explanation.
+1. If Neo4j person candidates are supplied, select exactly one matching official
+   Person.Name from that list. Do not return surrounding wording such as
+   "hours for", "working hours", "in", or the prediction verb.
+2. If no candidate is a match, copy only the person name or nickname supplied.
+3. Copy the DID exactly as supplied.
+4. Do not invent missing values.
+5. Use conversation history only to resolve an explicitly referenced prior person or DID.
+6. Do not add markdown or explanation.
 Examples:
 - "predict C1071007_141 hours for Lumamman" ->
   {"person":"Lumanman","did":"C1071007_141","as_of_date":null}
@@ -301,7 +314,10 @@ Examples:
   {"person":"Riven","did":"C1071007_141","as_of_date":null}
 - "Riven 的工时" with a prior prediction for C1071007_141 ->
   {"person":"Riven","did":"C1071007_141","as_of_date":null}"""
-    user = f"""Conversation history:
+    user = f"""Likely official Neo4j Person.Name candidates:
+{json.dumps(candidates, ensure_ascii=False)}
+
+Conversation history:
 {history_text or '(none)'}
 
 Current request:

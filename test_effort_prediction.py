@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from datetime import date, timedelta
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 
@@ -24,6 +25,7 @@ from effort_prediction import (
     build_feature_row,
     build_training_features,
     clean_training_records,
+    person_name_candidates,
     predict_record,
     quality_report,
     train_model,
@@ -93,6 +95,16 @@ class EffortPredictionTests(unittest.TestCase):
             _select_person_name(
                 "Manman", ("Lu, Manman (Manman)", "Wang, Manman (Manman)")
             )
+
+    def test_person_name_candidates_rank_close_database_names(self) -> None:
+        with patch("effort_prediction._available_person_names", return_value=(
+            "Lu, Manman",
+            "Chen, Zhenchao (Riven)",
+            "Zhou, Feifeng",
+        )):
+            candidates = person_name_candidates("LUMANMAN")
+
+        self.assertEqual(candidates[0], "Lu, Manman")
 
     def test_lfs_pointer_is_not_treated_as_a_model(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

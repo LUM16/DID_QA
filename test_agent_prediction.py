@@ -157,13 +157,38 @@ class AgentPredictionTests(unittest.TestCase):
             {"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6},
         ),
     )
-    def test_did_before_person_uses_llm_parameter_extraction(self, mock_chat) -> None:
+    @patch("agent.person_name_candidates", return_value=["Lu, Manman"])
+    def test_did_before_person_uses_llm_parameter_extraction(
+        self, mock_candidates, mock_chat
+    ) -> None:
         parameters, usage = agent.extract_effort_prediction_parameters(
             "predict C1071007_141 hours for Lumamman"
         )
 
         mock_chat.assert_called_once()
+        mock_candidates.assert_called_once()
         self.assertEqual(parameters["person"], "Lumanman")
+        self.assertEqual(parameters["did"], "C1071007_141")
+        self.assertEqual(usage["total_tokens"], 6)
+
+    @patch(
+        "agent._chat",
+        return_value=(
+            '{"person":"Lu, Manman","did":"C1071007_141","as_of_date":null}',
+            {"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6},
+        ),
+    )
+    @patch("agent.person_name_candidates", return_value=["Lu, Manman"])
+    def test_llm_removes_english_person_phrase_before_matching(
+        self, mock_candidates, mock_chat
+    ) -> None:
+        parameters, usage = agent.extract_effort_prediction_parameters(
+            "estimate how many working hours for LUMANMAN IN C1071007_141"
+        )
+
+        mock_candidates.assert_called_once()
+        mock_chat.assert_called_once()
+        self.assertEqual(parameters["person"], "Lu, Manman")
         self.assertEqual(parameters["did"], "C1071007_141")
         self.assertEqual(usage["total_tokens"], 6)
 
