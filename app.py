@@ -79,31 +79,42 @@ st.markdown(
         outline: none !important;
         box-shadow: none !important;
       }
-      [data-testid="stChatInput"] {
-        background: rgba(255, 255, 255, 0.9);
-        border: 1px solid #c5d4ce !important;
-        border-radius: 18px;
-        padding: 0.4rem 0.55rem 0.4rem 0.2rem;
-        box-shadow: 0 8px 24px rgba(26, 58, 50, 0.08) !important;
+      [data-testid="stChatInput"],
+      [data-testid="stChatInput"]:focus,
+      [data-testid="stChatInput"]:focus-within,
+      [data-testid="stChatInput"] *:focus,
+      [data-testid="stChatInput"] *:focus-visible,
+      [data-testid="stChatInput"] *:focus-within {
         outline: none !important;
       }
-      [data-testid="stChatInput"]:focus-within {
+      [data-testid="stChatInput"] {
+        background: transparent !important;
+        border: none !important;
+        box-shadow: none !important;
+        padding: 0 !important;
+      }
+      [data-testid="stChatInput"] > div {
+        background: rgba(255, 255, 255, 0.9) !important;
+        border: 1px solid #c5d4ce !important;
+        border-radius: 18px !important;
+        box-shadow: 0 8px 24px rgba(26, 58, 50, 0.08) !important;
+      }
+      [data-testid="stChatInput"]:focus-within > div {
         border: 1px solid #3d6b5e !important;
         box-shadow: 0 8px 24px rgba(26, 58, 50, 0.08) !important;
+      }
+      [data-testid="stChatInput"] [data-baseweb="textarea"],
+      [data-testid="stChatInput"] [data-baseweb="textarea"] > div,
+      [data-testid="stChatInput"] [data-baseweb="base-input"],
+      [data-testid="stChatInput"] textarea {
+        border: none !important;
         outline: none !important;
+        box-shadow: none !important;
+        background: transparent !important;
       }
       [data-testid="stChatInput"] textarea {
         font-size: 1.05rem !important;
         min-height: 3.4rem !important;
-        border: none !important;
-        outline: none !important;
-        box-shadow: none !important;
-      }
-      [data-testid="stChatInput"] textarea:focus,
-      [data-testid="stChatInput"] textarea:focus-visible {
-        border: none !important;
-        outline: none !important;
-        box-shadow: none !important;
       }
       [data-testid="stBottomBlockContainer"] {
         background: transparent !important;
