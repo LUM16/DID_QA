@@ -46,29 +46,64 @@ st.markdown(
         font-size: 0.82rem; background: #1e2a28; color: #c8e6d8;
         padding: 0.75rem 1rem; border-radius: 8px; overflow-x: auto;
       }
+      .block-container:has(.landing-marker) [data-testid="stTextArea"] [data-baseweb="textarea"] {
+        background: transparent !important;
+        border: none !important;
+        box-shadow: none !important;
+        outline: none !important;
+      }
+      .block-container:has(.landing-marker) [data-testid="stTextArea"] [data-baseweb="textarea"] > div {
+        background: rgba(255, 255, 255, 0.88) !important;
+        border: 1px solid #c5d4ce !important;
+        border-radius: 16px !important;
+        box-shadow: 0 10px 32px rgba(26, 58, 50, 0.08) !important;
+      }
+      .block-container:has(.landing-marker) [data-testid="stTextArea"] [data-baseweb="textarea"]:focus-within > div {
+        border: 1px solid #3d6b5e !important;
+        box-shadow: 0 10px 32px rgba(26, 58, 50, 0.08) !important;
+        outline: none !important;
+      }
       .block-container:has(.landing-marker) [data-testid="stTextArea"] textarea {
         font-size: 1.08rem;
         min-height: 7.2rem;
+        border: none !important;
+        outline: none !important;
+        box-shadow: none !important;
+        background: transparent !important;
         border-radius: 16px;
-        border: 1px solid #c5d4ce;
-        background: rgba(255, 255, 255, 0.88);
-        box-shadow: 0 10px 32px rgba(26, 58, 50, 0.08);
         padding: 0.9rem 1rem;
       }
-      .block-container:has(.landing-marker) [data-testid="stTextArea"] textarea:focus {
-        border-color: #3d6b5e;
-        box-shadow: 0 10px 32px rgba(26, 58, 50, 0.12);
+      .block-container:has(.landing-marker) [data-testid="stTextArea"] textarea:focus,
+      .block-container:has(.landing-marker) [data-testid="stTextArea"] textarea:focus-visible {
+        border: none !important;
+        outline: none !important;
+        box-shadow: none !important;
       }
       [data-testid="stChatInput"] {
         background: rgba(255, 255, 255, 0.9);
-        border: 1px solid #c5d4ce;
+        border: 1px solid #c5d4ce !important;
         border-radius: 18px;
         padding: 0.4rem 0.55rem 0.4rem 0.2rem;
-        box-shadow: 0 8px 24px rgba(26, 58, 50, 0.08);
+        box-shadow: 0 8px 24px rgba(26, 58, 50, 0.08) !important;
+        outline: none !important;
+      }
+      [data-testid="stChatInput"]:focus-within {
+        border: 1px solid #3d6b5e !important;
+        box-shadow: 0 8px 24px rgba(26, 58, 50, 0.08) !important;
+        outline: none !important;
       }
       [data-testid="stChatInput"] textarea {
         font-size: 1.05rem !important;
         min-height: 3.4rem !important;
+        border: none !important;
+        outline: none !important;
+        box-shadow: none !important;
+      }
+      [data-testid="stChatInput"] textarea:focus,
+      [data-testid="stChatInput"] textarea:focus-visible {
+        border: none !important;
+        outline: none !important;
+        box-shadow: none !important;
       }
       [data-testid="stBottomBlockContainer"] {
         background: transparent !important;
