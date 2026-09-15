@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import streamlit as st
 
-from agent import ask
 from neo4j_client import connection_summary, get_schema, load_env
-from vox_client import add_usage, empty_usage, models_vox_genai
+from vox_client import add_usage, empty_usage
+
+APP_NAME = "DID Insight"
+APP_TAGLINE = "Graph intelligence and resource forecasting"
 
 st.set_page_config(
-    page_title="Neo4j QA (RSC)",
+    page_title=APP_NAME,
     page_icon="◈",
     layout="centered",
     initial_sidebar_state="expanded",
@@ -17,23 +19,75 @@ st.set_page_config(
 
 st.markdown(
     """
-<style>
-  .stApp { background: linear-gradient(165deg, #f3f6f4 0%, #e8eef2 45%, #f7f3ee 100%); }
-  [data-testid="stHeader"] { background: transparent; }
-  .block-container { padding-top: 1.5rem; max-width: 820px; }
-  .brand {
-    font-family: "Segoe UI", "PingFang SC", sans-serif;
-    font-size: 2rem; font-weight: 700; letter-spacing: -0.02em;
-    color: #1a3a32; margin-bottom: 0.15rem;
-  }
-  .tagline { color: #4a635c; margin-bottom: 1.4rem; }
-  .cypher-box {
-    font-family: Consolas, "Courier New", monospace;
-    font-size: 0.82rem; background: #1e2a28; color: #c8e6d8;
-    padding: 0.75rem 1rem; border-radius: 8px; overflow-x: auto;
-  }
-</style>
-""",
+    <style>
+      .stApp { background: linear-gradient(165deg, #f3f6f4 0%, #e8eef2 45%, #f7f3ee 100%); }
+      [data-testid="stHeader"] { background: transparent; }
+      .block-container { padding-top: 1.25rem; max-width: 820px; }
+      .brand {
+        font-family: "Segoe UI", "PingFang SC", sans-serif;
+        font-size: 2rem; font-weight: 700; letter-spacing: -0.02em;
+        color: #1a3a32; margin-bottom: 0.15rem;
+      }
+      .brand-hero {
+        font-size: 2.55rem; letter-spacing: -0.03em; margin-bottom: 0.35rem;
+      }
+      .brand-compact {
+        font-size: 1.2rem; font-weight: 700; letter-spacing: -0.02em;
+        color: #1a3a32; margin-bottom: 0.1rem;
+      }
+      .tagline { color: #4a635c; margin-bottom: 1.4rem; }
+      .tagline-hero { font-size: 1.08rem; color: #4a635c; margin-bottom: 0; }
+      .landing-hero {
+        padding: 16vh 0 1.75rem 0;
+        text-align: center;
+      }
+      .cypher-box {
+        font-family: Consolas, "Courier New", monospace;
+        font-size: 0.82rem; background: #1e2a28; color: #c8e6d8;
+        padding: 0.75rem 1rem; border-radius: 8px; overflow-x: auto;
+      }
+      .block-container:has(.landing-marker) [data-testid="stTextArea"] textarea {
+        font-size: 1.08rem;
+        min-height: 7.2rem;
+        border-radius: 16px;
+        border: 1px solid #c5d4ce;
+        background: rgba(255, 255, 255, 0.88);
+        box-shadow: 0 10px 32px rgba(26, 58, 50, 0.08);
+        padding: 0.9rem 1rem;
+      }
+      .block-container:has(.landing-marker) [data-testid="stTextArea"] textarea:focus {
+        border-color: #3d6b5e;
+        box-shadow: 0 10px 32px rgba(26, 58, 50, 0.12);
+      }
+      [data-testid="stChatInput"] {
+        background: rgba(255, 255, 255, 0.9);
+        border: 1px solid #c5d4ce;
+        border-radius: 18px;
+        padding: 0.4rem 0.55rem 0.4rem 0.2rem;
+        box-shadow: 0 8px 24px rgba(26, 58, 50, 0.08);
+      }
+      [data-testid="stChatInput"] textarea {
+        font-size: 1.05rem !important;
+        min-height: 3.4rem !important;
+      }
+      [data-testid="stBottomBlockContainer"] {
+        background: transparent !important;
+        padding-bottom: 1.4rem;
+      }
+      .block-container:has(.landing-marker) [data-testid="stFormSubmitButton"] button {
+        background: #1a3a32 !important;
+        border-color: #1a3a32 !important;
+        color: #fff !important;
+        min-height: 2.6rem;
+        font-weight: 600;
+        border-radius: 10px;
+      }
+      .block-container:has(.landing-marker) [data-testid="stFormSubmitButton"] button:hover {
+        background: #24483e !important;
+        border-color: #24483e !important;
+      }
+    </style>
+    """,
     unsafe_allow_html=True,
 )
 
@@ -50,30 +104,81 @@ def ensure_state() -> None:
         st.session_state.token_usage = empty_usage()
 
 
-ensure_state()
+def history_for_ask() -> list[dict]:
+    return [
+        {
+            **{"role": m["role"], "content": m["content"]},
+            **({"prediction": m["prediction"]} if m.get("prediction") else {}),
+        }
+        for m in st.session_state.messages[:-1]
+    ]
 
-st.markdown('<div class="brand">Neo4j QA</div>', unsafe_allow_html=True)
-st.markdown(
-    '<div class="tagline">Ask the Neo4j graph in natural language · powered by Pfizer Vox GenAI · RSC edition</div>',
-    unsafe_allow_html=True,
-)
+
+def render_message(msg: dict) -> None:
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
+        if msg.get("cypher") and st.session_state.show_cypher and msg["role"] == "assistant":
+            st.markdown(f'<div class="cypher-box">{msg["cypher"]}</div>', unsafe_allow_html=True)
+        if msg.get("usage") and msg["role"] == "assistant":
+            uu = msg["usage"]
+            st.caption(
+                f"Tokens this turn: {uu.get('total_tokens', 0)} "
+                f"(prompt {uu.get('prompt_tokens', 0)} · completion {uu.get('completion_tokens', 0)})"
+            )
+
+
+def enqueue_prompt(prompt: str) -> None:
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    st.rerun()
+
+
+def complete_pending_turn() -> None:
+    if not st.session_state.messages:
+        return
+    last = st.session_state.messages[-1]
+    if last["role"] != "user":
+        return
+
+    prompt = last["content"]
+    with st.chat_message("assistant"):
+        with st.spinner("Working…"):
+            try:
+                from agent import ask
+
+                result = ask(prompt, history=history_for_ask(), schema=st.session_state.schema)
+                st.session_state.schema = result["schema"]
+                answer = result["answer"]
+                cypher = result.get("cypher") or ""
+                usage = result.get("usage") or empty_usage()
+                st.session_state.token_usage = add_usage(st.session_state.token_usage, usage)
+                st.markdown(answer)
+                if cypher and st.session_state.show_cypher:
+                    st.markdown(f'<div class="cypher-box">{cypher}</div>', unsafe_allow_html=True)
+                st.caption(
+                    f"Tokens this turn: {usage.get('total_tokens', 0)} "
+                    f"(prompt {usage.get('prompt_tokens', 0)} · completion {usage.get('completion_tokens', 0)})"
+                )
+                st.session_state.messages.append(
+                    {
+                        "role": "assistant",
+                        "content": answer,
+                        "cypher": cypher,
+                        "usage": usage,
+                        "prediction": result.get("prediction"),
+                    }
+                )
+            except Exception as exc:  # noqa: BLE001
+                err = f"Something went wrong: {exc}"
+                st.error(err)
+                st.session_state.messages.append({"role": "assistant", "content": err})
+
+
+ensure_state()
 
 with st.sidebar:
     st.subheader("Connection")
     st.caption(f"URI: `{connection_summary()}`")
     st.caption("Database: `neo4j` · read-only")
-
-    st.divider()
-    st.markdown("# List available Vox GenAI V2 models")
-    try:
-        available_models = models_vox_genai()
-        if available_models:
-            for model_name in available_models:
-                st.caption(f"- `{model_name}`")
-        else:
-            st.warning("models_vox_genai() returned no available models.")
-    except Exception as exc:  # noqa: BLE001
-        st.error(f"Failed to load Vox GenAI models: {exc}")
 
     st.divider()
     st.session_state.show_cypher = st.toggle(
@@ -105,62 +210,39 @@ with st.sidebar:
     )
     st.caption("Each question usually uses 2 LLM calls (Cypher + answer).")
 
-for msg in st.session_state.messages:
-    with st.chat_message(msg["role"]):
-        st.markdown(msg["content"])
-        if msg.get("cypher") and st.session_state.show_cypher and msg["role"] == "assistant":
-            st.markdown(f'<div class="cypher-box">{msg["cypher"]}</div>', unsafe_allow_html=True)
-        if msg.get("usage") and msg["role"] == "assistant":
-            uu = msg["usage"]
-            st.caption(
-                f"Tokens this turn: {uu.get('total_tokens', 0)} "
-                f"(prompt {uu.get('prompt_tokens', 0)} · completion {uu.get('completion_tokens', 0)})"
+in_conversation = bool(st.session_state.messages)
+
+if not in_conversation:
+    st.markdown(
+        f"""
+        <div class="landing-marker"></div>
+        <div class="landing-hero">
+          <div class="brand brand-hero">{APP_NAME}</div>
+          <div class="tagline-hero">{APP_TAGLINE}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    left, mid, right = st.columns([0.06, 0.88, 0.06])
+    with mid:
+        with st.form("landing_ask", clear_on_submit=True, border=False):
+            landing_text = st.text_area(
+                "Question",
+                placeholder="Ask about studies, deliveries, workload, or forecast DID effort…",
+                height=120,
+                label_visibility="collapsed",
             )
-
-prompt = st.chat_input("e.g. What deliveries does study C1071007 have?")
-
-if prompt:
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user"):
-        st.markdown(prompt)
-
-    with st.chat_message("assistant"):
-        with st.spinner("Querying Neo4j…"):
-            history = [
-                {
-                    **{"role": m["role"], "content": m["content"]},
-                    **(
-                        {"prediction": m["prediction"]}
-                        if m.get("prediction")
-                        else {}
-                    ),
-                }
-                for m in st.session_state.messages[:-1]
-            ]
-            try:
-                result = ask(prompt, history=history, schema=st.session_state.schema)
-                st.session_state.schema = result["schema"]
-                answer = result["answer"]
-                cypher = result.get("cypher") or ""
-                usage = result.get("usage") or empty_usage()
-                st.session_state.token_usage = add_usage(st.session_state.token_usage, usage)
-                st.markdown(answer)
-                if cypher and st.session_state.show_cypher:
-                    st.markdown(f'<div class="cypher-box">{cypher}</div>', unsafe_allow_html=True)
-                st.caption(
-                    f"Tokens this turn: {usage.get('total_tokens', 0)} "
-                    f"(prompt {usage.get('prompt_tokens', 0)} · completion {usage.get('completion_tokens', 0)})"
-                )
-                st.session_state.messages.append(
-                    {
-                        "role": "assistant",
-                        "content": answer,
-                        "cypher": cypher,
-                        "usage": usage,
-                        "prediction": result.get("prediction"),
-                    }
-                )
-            except Exception as exc:  # noqa: BLE001
-                err = f"Something went wrong: {exc}"
-                st.error(err)
-                st.session_state.messages.append({"role": "assistant", "content": err})
+            submitted = st.form_submit_button("Ask", type="primary", use_container_width=True)
+        if submitted:
+            prompt = (landing_text or "").strip()
+            if prompt:
+                enqueue_prompt(prompt)
+else:
+    st.markdown(f'<div class="brand-compact">{APP_NAME}</div>', unsafe_allow_html=True)
+    st.caption(APP_TAGLINE)
+    for msg in st.session_state.messages:
+        render_message(msg)
+    complete_pending_turn()
+    follow_up = st.chat_input("Ask a follow-up…")
+    if follow_up:
+        enqueue_prompt(follow_up.strip())
