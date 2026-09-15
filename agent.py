@@ -62,7 +62,7 @@ EFFORT_PREDICTION_PATTERNS = (
     r"\bhow long will\b",
     r"\bexpected (?:effort|hours?|time)\b",
 )
-DID_PATTERN = re.compile(r"\b[A-Za-z][A-Za-z0-9-]*_\d+\b")
+DID_PATTERN = re.compile(r"(?<![A-Za-z0-9_])[A-Za-z][A-Za-z0-9-]*_\d+(?![A-Za-z0-9_])")
 ISO_DATE_PATTERN = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
 PERSON_REFERENCE_PATTERN = re.compile(
     r"^(?:他|她|这个人|该人员|上述人员|上面的人|那个人|"
@@ -236,7 +236,12 @@ def _extract_effort_parameters_locally(
             person,
             flags=re.IGNORECASE,
         ).strip(" ,，:：'\"")
-        if not person or PERSON_REFERENCE_PATTERN.fullmatch(person) or DID_ONLY_PREFIX_PATTERN.fullmatch(person):
+        if (
+            not person
+            or PERSON_REFERENCE_PATTERN.fullmatch(person)
+            or DID_ONLY_PREFIX_PATTERN.fullmatch(person)
+            or (context and PERSON_REFERENCE_TEXT_PATTERN.search(question))
+        ):
             person = context["person"] if context else ""
         if not person:
             return None
@@ -278,17 +283,10 @@ def _extract_effort_parameters_locally(
     }
 
 
-def _is_person_name_candidate(value: str | None) -> bool:
-    return bool(value and not NON_NAME_WORD_PATTERN.search(value))
-
-
 def extract_effort_prediction_parameters(
     question: str, history: list[dict[str, Any]] | None = None
 ) -> tuple[dict[str, str | None], dict[str, int]]:
     local_parameters = _extract_effort_parameters_locally(question, history)
-    if local_parameters and _is_person_name_candidate(local_parameters["person"]):
-        return local_parameters, empty_usage()
-
     history_text = ""
     if history:
         history_text = "\n".join(
@@ -316,6 +314,10 @@ Examples:
   {"person":"Riven","did":"C1071007_141","as_of_date":null}"""
     user = f"""Likely official Neo4j Person.Name candidates:
 {json.dumps(candidates, ensure_ascii=False)}
+
+Locally parsed parameters (use only as a hint; correct them when the full
+question or prediction context indicates a different person or DID):
+{json.dumps(local_parameters, ensure_ascii=False) if local_parameters else "(none)"}
 
 Conversation history:
 {history_text or '(none)'}

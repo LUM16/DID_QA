@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import unittest
 from unittest.mock import patch
 
@@ -43,8 +44,27 @@ PREDICTION = {
 
 
 class AgentPredictionTests(unittest.TestCase):
-    def test_prediction_context_fills_missing_person_or_did(self) -> None:
+    def _parameter_response(
+        self, person: str, did: str, as_of_date: str | None = None
+    ) -> tuple[str, dict[str, int]]:
+        return (
+            json.dumps(
+                {"person": person, "did": did, "as_of_date": as_of_date}
+            ),
+            {"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6},
+        )
+
+    @patch("agent.person_name_candidates", return_value=["Chen, Zhenchao (Riven)"])
+    @patch("agent._chat")
+    def test_prediction_context_fills_missing_person_or_did(
+        self, mock_chat, mock_candidates
+    ) -> None:
         history = [{"role": "assistant", "content": "Prior prediction", "prediction": PREDICTION}]
+        mock_chat.side_effect = [
+            self._parameter_response("Chen, Zhenchao (Riven)", "C5001001_60"),
+            self._parameter_response("Chen, Zhenchao (Riven)", "C5001001_59"),
+            self._parameter_response("Chen, Zhenchao (Riven)", "C5001001_59"),
+        ]
 
         did_only, did_only_usage = agent.extract_effort_prediction_parameters(
             "预测 C5001001_60", history
@@ -58,17 +78,60 @@ class AgentPredictionTests(unittest.TestCase):
 
         self.assertEqual(did_only["person"], "Chen, Zhenchao (Riven)")
         self.assertEqual(did_only["did"], "C5001001_60")
-        self.assertEqual(person_only["person"], "Riven")
+        self.assertEqual(person_only["person"], "Chen, Zhenchao (Riven)")
         self.assertEqual(person_only["did"], "C5001001_59")
         self.assertEqual(reference["person"], "Chen, Zhenchao (Riven)")
         self.assertEqual(reference["did"], "C5001001_59")
-        self.assertEqual(did_only_usage["total_tokens"], 0)
-        self.assertEqual(person_only_usage["total_tokens"], 0)
-        self.assertEqual(reference_usage["total_tokens"], 0)
+        self.assertEqual(did_only_usage["total_tokens"], 6)
+        self.assertEqual(person_only_usage["total_tokens"], 6)
+        self.assertEqual(reference_usage["total_tokens"], 6)
+
+    def test_did_next_to_chinese_text_uses_new_did_and_context_person(self) -> None:
+        history = [{"role": "assistant", "content": "Prior prediction", "prediction": PREDICTION}]
+
+        with (
+            patch("agent.person_name_candidates", return_value=["Chen, Zhenchao (Riven)"]),
+            patch(
+                "agent._chat",
+                return_value=self._parameter_response(
+                    "Chen, Zhenchao (Riven)", "C1071007_142"
+                ),
+            ),
+        ):
+            parameters, usage = agent.extract_effort_prediction_parameters(
+                "我问的是C1071007_142她要花多少时间", history
+            )
+
+        self.assertEqual(parameters["person"], "Chen, Zhenchao (Riven)")
+        self.assertEqual(parameters["did"], "C1071007_142")
+        self.assertEqual(usage["total_tokens"], 6)
+
+    def test_did_next_to_chinese_text_keeps_explicit_person(self) -> None:
+        with (
+            patch("agent.person_name_candidates", return_value=["Lu, Manman"]),
+            patch(
+                "agent._chat",
+                return_value=self._parameter_response("Lu, Manman", "C1071007_142"),
+            ),
+        ):
+            parameters, usage = agent.extract_effort_prediction_parameters(
+                "LUMANMAN C1071007_142要花多少时间"
+            )
+
+        self.assertEqual(parameters["person"], "Lu, Manman")
+        self.assertEqual(parameters["did"], "C1071007_142")
+        self.assertEqual(usage["total_tokens"], 6)
 
     @patch("agent.predict_effort", return_value=PREDICTION)
-    def test_contextual_did_replacement_routes_without_llm(self, mock_predict) -> None:
+    @patch("agent.person_name_candidates", return_value=["Chen, Zhenchao (Riven)"])
+    @patch("agent._chat")
+    def test_contextual_did_replacement_routes_with_llm_parameters(
+        self, mock_chat, mock_candidates, mock_predict
+    ) -> None:
         history = [{"role": "assistant", "content": "Prior prediction", "prediction": PREDICTION}]
+        mock_chat.return_value = self._parameter_response(
+            "Chen, Zhenchao (Riven)", "C5001001_60", "2026-09-11"
+        )
 
         result = agent.ask("换成 C5001001_60", history=history)
 
@@ -77,30 +140,36 @@ class AgentPredictionTests(unittest.TestCase):
             did="C5001001_60",
             as_of_date="2026-09-11",
         )
-        self.assertEqual(result["usage"]["total_tokens"], 0)
+        self.assertEqual(result["usage"]["total_tokens"], 6)
 
     @patch("agent.predict_effort", return_value=PREDICTION)
+    @patch("agent.person_name_candidates", return_value=["Chen, Zhenchao (Riven)"])
     @patch(
         "agent._chat",
-        return_value=(
-            '{"intent":"effort_prediction"}',
-            {"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6},
-        ),
     )
     def test_llm_classifies_flexible_forecast_wording(
-        self, mock_chat, mock_predict
+        self, mock_chat, mock_candidates, mock_predict
     ) -> None:
         history = [{"role": "assistant", "content": "Prior prediction", "prediction": PREDICTION}]
+        mock_chat.side_effect = [
+            (
+                '{"intent":"effort_prediction"}',
+                {"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6},
+            ),
+            self._parameter_response(
+                "Chen, Zhenchao (Riven)", "C5001001_60", "2026-09-11"
+            ),
+        ]
 
         result = agent.ask("C5001001_60 大概要投入多久？", history=history)
 
-        mock_chat.assert_called_once()
+        self.assertEqual(mock_chat.call_count, 2)
         mock_predict.assert_called_once_with(
             person="Chen, Zhenchao (Riven)",
             did="C5001001_60",
             as_of_date="2026-09-11",
         )
-        self.assertEqual(result["usage"]["total_tokens"], 6)
+        self.assertEqual(result["usage"]["total_tokens"], 12)
 
     def test_prediction_intent_does_not_match_historical_hours(self) -> None:
         self.assertTrue(
@@ -120,13 +189,15 @@ class AgentPredictionTests(unittest.TestCase):
         )
 
     @patch("agent.predict_effort", return_value=PREDICTION)
+    @patch("agent.person_name_candidates", return_value=["Chen, Zhenchao (Riven)"])
     @patch("agent._chat")
     def test_ask_routes_prediction_without_schema_or_cypher(
-        self, mock_chat, mock_predict
+        self, mock_chat, mock_candidates, mock_predict
     ) -> None:
+        mock_chat.return_value = self._parameter_response("Riven", "C5001001_59")
         result = agent.ask("预测 Riven 完成 C5001001_59 需要多少工时？")
 
-        mock_chat.assert_not_called()
+        mock_chat.assert_called_once()
         mock_predict.assert_called_once_with(
             person="Riven", did="C5001001_59", as_of_date=None
         )
@@ -139,16 +210,21 @@ class AgentPredictionTests(unittest.TestCase):
         self.assertIn("ADaM 相似度 100%", result["answer"])
         self.assertIn("SDTM 相似度 100%", result["answer"])
         self.assertNotIn("总体相似度", result["answer"])
-        self.assertEqual(result["usage"]["total_tokens"], 0)
+        self.assertEqual(result["usage"]["total_tokens"], 6)
 
-    def test_local_parameter_extraction_supports_english(self) -> None:
+    @patch("agent.person_name_candidates", return_value=["Chen, Zhenchao (Riven)"])
+    @patch("agent._chat")
+    def test_llm_parameter_extraction_supports_english(
+        self, mock_chat, mock_candidates
+    ) -> None:
+        mock_chat.return_value = self._parameter_response("Riven", "C5001001_59")
         parameters, usage = agent.extract_effort_prediction_parameters(
             "Predict Riven's effort for C5001001_59"
         )
 
         self.assertEqual(parameters["person"], "Riven")
         self.assertEqual(parameters["did"], "C5001001_59")
-        self.assertEqual(usage["total_tokens"], 0)
+        self.assertEqual(usage["total_tokens"], 6)
 
     @patch(
         "agent._chat",

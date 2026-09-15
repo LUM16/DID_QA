@@ -477,7 +477,11 @@ TLF 语义匹配结果按目标/历史 TLF 清单的内容哈希保存到
 tlf_prior_overlap_count
 adam_prior_overlap_count
 sdtm_prior_overlap_count
-tlf_prior_coverage
+py .\effort_prediction.py predict `
+  --model .\artifacts\did_effort_model.joblib `
+  --person "FEN, HANRONG" `
+  --did "A3921210_42" `
+  --as-of-date "2026-09-14"
 adam_prior_coverage
 sdtm_prior_coverage
 overall_prior_coverage
@@ -920,15 +924,24 @@ Text-to-Cypher 流程。
 
 ```text
 识别预测意图
-→ 提取 Person、DID 和可选 as-of date
+→ LLM 提取 Person、DID 和可选 as-of date
+→ 从 Neo4j Person.Name 生成相近正式姓名候选，并约束 LLM 选择
+→ Python 对返回姓名执行唯一匹配验证
 → 从 Neo4j 读取 Planned/Ongoing DID 当前范围
 → 加载并缓存 artifacts/did_effort_model.joblib
 → Python 计算 P50/P80/P90
 → Agent 用固定模板展示结果
 ```
 
-常见中英文请求在本地解析，不消耗 LLM token；复杂表达才回退到 Vox 提取参数。
-模型文件按修改时间缓存，重新发布新模型后会自动加载新版本。
+当前预测路由采用 LLM-first 参数提取：只要请求已判定为工时预测，LLM 都会解析
+自然语言中的人员、DID 和日期，而不是由正则直接决定人名。候选姓名来自当前 Neo4j
+数据库，LLM 必须选用其中一个正式 `Person.Name`；Python 随后再次验证唯一匹配，避免
+名称拼写、空格、别名或词序差异导致把整句误当作人名。
+
+因此，每个预测请求至少会消耗一次 LLM 调用；对于意图不明确的 DID 问题，系统会先做
+一次预测/普通图查询意图分类，因此可能消耗两次 LLM 调用。LLM 只负责路由和参数提取，
+不会计算、修改或解释 P50/P80/P90 数值。模型文件按修改时间缓存，重新发布新模型后会
+自动加载新版本。
 
 ## 14. 推荐的首次运行步骤
 
