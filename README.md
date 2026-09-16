@@ -93,6 +93,18 @@ py effort_prediction.py export-ongoing --output data\ongoing_did_predictions.csv
 The CSV contains one `Person x DID` row per assignment, the V3 P50/P80/P90
 forecast, planned delivery date, model version, and key similarity diagnostics.
 
+Validate a preserved ongoing snapshot once assignments become completed:
+
+```cmd
+py validate_effort_predictions.py --input data\ongoing_did_predictions.csv --output data\prediction_actual_comparison_YYYY-MM-DD.csv --report data\prediction_validation_report_YYYY-MM-DD.md
+```
+
+This keeps every completed comparison row in the CSV for audit, but formal
+accuracy metrics include only rows with at least one recorded `TIME_ON` entry.
+The command also writes a self-contained HTML dashboard beside the report,
+including a P50-versus-actual scatter plot and long-tail error diagnostics.
+Use `--visualization path\to\dashboard.html` to select another dashboard path.
+
 Use `--as-of-date YYYY-MM-DD` for a historical/current-state forecast. Only
 completed records strictly before that date contribute to personal efficiency
 and similarity features. Generated exports and model artifacts are gitignored.
@@ -122,6 +134,19 @@ presentation and never fails an otherwise successful Q&A response. See
 Prediction requests continue with their separate LLM-first parameter extraction,
 Neo4j validation, and V3 model calculation. Python computes P50/P80/P90; the
 LLM does not calculate or alter prediction values.
+
+### DU Team recommendation
+
+The **Recommend DU Team** tab accepts a new Delivery scope as either an Excel
+workbook with `TLF` and `Data` sheets, or paired `TLF` and `Data` CSV files.
+It does not train a model or write to Neo4j. Instead, Python ranks current
+`Person.Team_Lead_Name` groups using completed-DID scope evidence: cached TLF
+semantic coverage, exact ADaM/SDTM coverage, similar completed DID counts,
+recency, and the current count of planned/ongoing DIDs. The shared
+`did_effort_similarity_cache.joblib` is reused and updated to avoid repeating
+TLF comparisons. Recommendations are decision support only; review displayed
+scope gaps and similar historical DIDs before assigning work.
+See the full [DU Team recommendation metric definition](docs/du_team_recommendation.md).
 
 The presentation layer labels only unambiguous returned fields: `hours`,
 `recorded_hours`, and `time_on_hours` mean recorded `TIME_ON` hours;

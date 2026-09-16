@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import streamlit as st
 
 from neo4j_client import connection_summary, get_schema, load_env
@@ -9,6 +11,7 @@ from vox_client import add_usage, empty_usage
 
 APP_NAME = "DID Insight"
 APP_TAGLINE = "Graph intelligence and resource forecasting"
+EXAMPLE_DU_SCOPE_PATH = Path(__file__).resolve().parent / "docs" / "C5001001_61.xlsx"
 
 st.set_page_config(
     page_title=APP_NAME,
@@ -275,6 +278,147 @@ def complete_pending_turn() -> None:
                 st.session_state.messages.append({"role": "assistant", "content": err})
 
 
+def render_team_recommendation() -> None:
+    """Render the upload-driven, read-only DU team scope-match workflow."""
+    st.subheader("Recommend DU Team")
+    st.caption(
+        "Upload a new Delivery scope. Recommendations use completed Neo4j history, "
+        "current Team Lead membership, and the shared TLF similarity cache."
+    )
+    st.info(
+        "Accepted input: one Excel workbook with sheets named TLF and Data, or a "
+        "TLF CSV plus a Data CSV. The uploaded scope is not written to Neo4j."
+    )
+    st.markdown("**Example input — `C5001001_61.xlsx`**")
+    st.caption(
+        "This example contains TLF and Data sheets and can be downloaded, reviewed, "
+        "then uploaded directly to try the recommendation workflow."
+    )
+    if EXAMPLE_DU_SCOPE_PATH.exists():
+        st.download_button(
+            "Download example input",
+            data=EXAMPLE_DU_SCOPE_PATH.read_bytes(),
+            file_name=EXAMPLE_DU_SCOPE_PATH.name,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+        )
+    else:
+        st.warning("The bundled DU recommendation example input is unavailable.")
+    primary_file = st.file_uploader(
+        "Delivery scope workbook or TLF CSV",
+        type=["xlsx", "csv"],
+        key="du_scope_primary",
+    )
+    data_csv_file = None
+    if primary_file and primary_file.name.lower().endswith(".csv"):
+        data_csv_file = st.file_uploader(
+            "Data CSV",
+            type=["csv"],
+            key="du_scope_data",
+        )
+    if not primary_file:
+        return
+    upload_key = (
+        primary_file.name,
+        len(primary_file.getvalue()),
+        data_csv_file.name if data_csv_file else "",
+        len(data_csv_file.getvalue()) if data_csv_file else 0,
+    )
+    if st.button("Recommend DU teams", type="primary", use_container_width=True):
+        try:
+            from du_team_recommendation import recommend_uploaded_scope
+
+            with st.spinner("Reading scope and comparing completed DU experience..."):
+                result = recommend_uploaded_scope(primary_file, data_csv_file)
+            st.session_state.du_team_recommendation = result
+            st.session_state.du_team_recommendation_input = upload_key
+        except (RuntimeError, ValueError) as exc:
+            st.error(str(exc))
+            return
+        except Exception as exc:  # noqa: BLE001
+            st.error(f"DU team recommendation failed: {exc}")
+            return
+
+    result = st.session_state.get("du_team_recommendation")
+    if not result or st.session_state.get("du_team_recommendation_input") != upload_key:
+        return
+    counts = result["target_counts"]
+    left, middle, right = st.columns(3)
+    left.metric("Target TLFs", counts["tlfs"])
+    middle.metric("Target ADaM", counts["adams"])
+    right.metric("Target SDTM", counts["sdtms"])
+
+    recommendations = result["recommendations"]
+    if not recommendations:
+        st.warning("No DU team recommendations were produced from the available history.")
+        return
+    st.bar_chart(
+        [
+            {"du_team": row["du_team"], "score": row["score"]}
+            for row in recommendations
+        ],
+        x="du_team",
+        y="score",
+        horizontal=True,
+    )
+    st.caption(
+        "Overall score is a transparent scope-match score, not a trained-model probability."
+    )
+    for row in recommendations:
+        st.markdown(
+            f"### #{row['rank']} — {row['du_team']} · {row['score']:.1f}/100"
+        )
+        st.caption(row["recommendation_level"])
+        st.dataframe(
+            [
+                {
+                    "TLF semantic coverage": f"{row['tlf_semantic_coverage']:.1%}",
+                    "ADaM coverage": f"{row['adam_coverage']:.1%}",
+                    "SDTM coverage": f"{row['sdtm_coverage']:.1%}",
+                    "Similar DID >= 70%": row["similar_did_count_ge_70"],
+                    "Similar DID >= 85%": row["similar_did_count_ge_85"],
+                    "Completed DIDs": row["completed_did_count"],
+                    "Semantic candidates": row["semantic_candidate_did_count"],
+                    "Active DIDs": row["active_did_count"],
+                }
+            ],
+            use_container_width=True,
+            hide_index=True,
+        )
+        gaps = []
+        if row["missing_adams"]:
+            gaps.append(f"Missing ADaM: {', '.join(row['missing_adams'])}")
+        if row["missing_sdtms"]:
+            gaps.append(f"Missing SDTM: {', '.join(row['missing_sdtms'])}")
+        if row["missing_exact_tlfs"]:
+            gaps.append(
+                f"No exact historical TLF title match: {len(row['missing_exact_tlfs'])}"
+            )
+        if gaps:
+            st.warning(" | ".join(gaps))
+        else:
+            st.success("No exact ADaM or SDTM coverage gaps were found.")
+        with st.expander("Most similar completed DIDs"):
+            st.dataframe(
+                [
+                    {
+                        "DID": did["did"],
+                        "Completed": did["completion_date"],
+                        "Scope similarity": f"{did['combined_similarity']:.1%}",
+                        "TLF semantic coverage": f"{did['tlf_semantic_coverage']:.1%}",
+                    }
+                    for did in row["similar_dids"]
+                ],
+                use_container_width=True,
+                hide_index=True,
+            )
+    cache = result["cache"]
+    st.caption(
+        f"Shared TLF similarity cache: {cache['hits']:,} hits · "
+        f"{cache['misses']:,} new comparisons."
+    )
+
+
 ensure_state()
 
 with st.sidebar:
@@ -312,39 +456,46 @@ with st.sidebar:
     )
     st.caption("Normal Q&A usually uses 3 LLM calls (Cypher + answer + presentation).")
 
-in_conversation = bool(st.session_state.messages)
+chat_tab, team_tab = st.tabs(["Ask Neo4j", "Recommend DU Team"])
 
-if not in_conversation:
-    st.markdown(
-        f"""
-        <div class="landing-marker"></div>
-        <div class="landing-hero">
-          <div class="brand brand-hero">{APP_NAME}</div>
-          <div class="tagline-hero">{APP_TAGLINE}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-    left, mid, right = st.columns([0.06, 0.88, 0.06])
-    with mid:
-        with st.form("landing_ask", clear_on_submit=True, border=False):
-            landing_text = st.text_area(
-                "Question",
-                placeholder="Ask about studies, deliveries, workload, or forecast DID effort…",
-                height=120,
-                label_visibility="collapsed",
-            )
-            submitted = st.form_submit_button("Ask", type="primary", use_container_width=True)
-        if submitted:
-            prompt = (landing_text or "").strip()
-            if prompt:
-                enqueue_prompt(prompt)
-else:
-    st.markdown(f'<div class="brand-compact">{APP_NAME}</div>', unsafe_allow_html=True)
-    st.caption(APP_TAGLINE)
-    for msg in st.session_state.messages:
-        render_message(msg)
-    complete_pending_turn()
-    follow_up = st.chat_input("Ask a follow-up…")
-    if follow_up:
-        enqueue_prompt(follow_up.strip())
+with chat_tab:
+    in_conversation = bool(st.session_state.messages)
+    if not in_conversation:
+        st.markdown(
+            f"""
+            <div class="landing-marker"></div>
+            <div class="landing-hero">
+              <div class="brand brand-hero">{APP_NAME}</div>
+              <div class="tagline-hero">{APP_TAGLINE}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        left, mid, right = st.columns([0.06, 0.88, 0.06])
+        with mid:
+            with st.form("landing_ask", clear_on_submit=True, border=False):
+                landing_text = st.text_area(
+                    "Question",
+                    placeholder="Ask about studies, deliveries, workload, or forecast DID effort…",
+                    height=120,
+                    label_visibility="collapsed",
+                )
+                submitted = st.form_submit_button(
+                    "Ask", type="primary", use_container_width=True
+                )
+            if submitted:
+                prompt = (landing_text or "").strip()
+                if prompt:
+                    enqueue_prompt(prompt)
+    else:
+        st.markdown(f'<div class="brand-compact">{APP_NAME}</div>', unsafe_allow_html=True)
+        st.caption(APP_TAGLINE)
+        for msg in st.session_state.messages:
+            render_message(msg)
+        complete_pending_turn()
+        follow_up = st.chat_input("Ask a follow-up…")
+        if follow_up:
+            enqueue_prompt(follow_up.strip())
+
+with team_tab:
+    render_team_recommendation()
