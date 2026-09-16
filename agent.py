@@ -461,6 +461,23 @@ ORDER BY hours DESC, person
     else:
         raise ValueError(f"Unsupported chart intent: {intent}.")
     rows = run_cypher(cypher)
+    value_field = "hours"
+    uses_assignment_fallback = False
+    if intent == "did_effort_distribution_chart" and not rows:
+        cypher = f"""
+MATCH (p:Person)-[work:WORKS_ON]->(d:Delivery)
+WHERE toString(d.DID) = '{did}'
+RETURN p.Name AS person,
+       round(coalesce(max(toFloat(coalesce(
+           work.Task_Num_Total, work.CSR_Task_Num_Total
+       ))), 0.0), 1) AS task_count
+ORDER BY task_count DESC, person
+"""
+        rows = run_cypher(cypher)
+        value_field = "task_count"
+        uses_assignment_fallback = bool(rows)
+        if uses_assignment_fallback:
+            title = f"{parameters['did']} assigned people by task count"
     chinese = bool(re.search(r"[\u4e00-\u9fff]", question))
     if intent == "monthly_hours_chart":
         answer = (
@@ -470,9 +487,19 @@ ORDER BY hours DESC, person
         )
     else:
         answer = (
-            f"已展示 DID **{parameters['did']}** 的人员投入分布。"
+            (
+                f"DID **{parameters['did']}** 暂无已记录工时；"
+                "已展示分配人员及其任务数。"
+                if uses_assignment_fallback
+                else f"已展示 DID **{parameters['did']}** 的人员投入分布。"
+            )
             if chinese
-            else f"Showing person effort distribution for DID **{parameters['did']}**."
+            else (
+                f"DID **{parameters['did']}** has no recorded hours; showing "
+                "assigned people by task count."
+                if uses_assignment_fallback
+                else f"Showing person effort distribution for DID **{parameters['did']}**."
+            )
         )
     return {
         "answer": answer,
@@ -481,7 +508,12 @@ ORDER BY hours DESC, person
         "schema": schema,
         "error": None,
         "usage": initial_usage,
-        "visualization": {"chart_type": intent, "title": title, "data": rows},
+        "visualization": {
+            "chart_type": intent,
+            "title": title,
+            "data": rows,
+            "value_field": value_field,
+        },
     }
 
 

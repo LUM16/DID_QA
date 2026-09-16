@@ -117,6 +117,10 @@ extraction, Neo4j validation, and V3 model calculation. Python computes
 P50/P80/P90; the LLM does not calculate or alter prediction values. Other
 questions continue through the existing read-only Text-to-Cypher flow.
 
+The DID person-effort chart uses recorded `TIME_ON.Hour` when it exists. For an
+ongoing DID without recorded hours, it instead shows the assigned `WORKS_ON`
+people by task count and labels that fallback clearly.
+
 ### RSC model artifact loading
 
 The v3 model and similarity cache are tracked in GitHub with Git LFS. Git-backed

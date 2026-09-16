@@ -168,7 +168,12 @@ def render_visualization(visualization: dict | None) -> None:
     if visualization["chart_type"] == "monthly_hours_chart":
         st.bar_chart(visualization["data"], x="month", y="hours")
     elif visualization["chart_type"] == "did_effort_distribution_chart":
-        st.bar_chart(visualization["data"], x="person", y="hours", horizontal=True)
+        st.bar_chart(
+            visualization["data"],
+            x="person",
+            y=visualization.get("value_field", "hours"),
+            horizontal=True,
+        )
 
 
 def render_message(msg: dict) -> None:

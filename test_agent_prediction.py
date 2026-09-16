@@ -274,6 +274,26 @@ class AgentPredictionTests(unittest.TestCase):
             result["visualization"]["chart_type"], "did_effort_distribution_chart"
         )
 
+    @patch("agent.run_cypher")
+    @patch("agent._chat")
+    def test_did_chart_falls_back_to_assigned_task_counts_without_time_records(
+        self, mock_chat, mock_run_cypher
+    ) -> None:
+        mock_chat.side_effect = [
+            ('{"intent":"did_effort_distribution_chart"}', {"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6}),
+            ('{"person":null,"did":"C1071007_141"}', {"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6}),
+        ]
+        mock_run_cypher.side_effect = [
+            [],
+            [{"person": "Person A", "task_count": 12.0}],
+        ]
+
+        result = agent.ask("C1071007_141 主要是谁做的？")
+
+        self.assertEqual(mock_run_cypher.call_count, 2)
+        self.assertEqual(result["visualization"]["value_field"], "task_count")
+        self.assertIn("暂无已记录工时", result["answer"])
+
     @patch(
         "agent._chat",
         return_value=(
