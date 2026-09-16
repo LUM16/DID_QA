@@ -5,11 +5,35 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-from du_team_recommendation import _scope_from_rows, recommend_teams
+from du_team_recommendation import (
+    DEFAULT_SIMILARITY_CACHE_PATH,
+    _resolve_recommendation_cache_path,
+    _scope_from_rows,
+    recommend_teams,
+)
 
 
 class TeamRecommendationTests(unittest.TestCase):
+    def test_default_cache_uses_artifact_resolver(self) -> None:
+        resolved_path = Path("C:/temporary/similarity.joblib")
+        with patch(
+            "du_team_recommendation._resolve_prediction_artifact",
+            return_value=resolved_path,
+        ) as resolver:
+            self.assertEqual(
+                _resolve_recommendation_cache_path(DEFAULT_SIMILARITY_CACHE_PATH),
+                resolved_path,
+            )
+        resolver.assert_called_once()
+
+    def test_custom_cache_does_not_use_artifact_resolver(self) -> None:
+        custom_path = Path("C:/temporary/custom-similarity.joblib")
+        with patch("du_team_recommendation._resolve_prediction_artifact") as resolver:
+            self.assertEqual(_resolve_recommendation_cache_path(custom_path), custom_path)
+        resolver.assert_not_called()
+
     def test_scope_rows_read_tlf_and_data_columns(self) -> None:
         scope = _scope_from_rows(
             [{"Title": "AE Summary", "Type": "T", "Source Datasets  ": "ADAE, ADSL"}],

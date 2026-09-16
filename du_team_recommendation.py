@@ -11,11 +11,13 @@ from typing import Any, Iterable
 
 from effort_prediction import (
     DEFAULT_SIMILARITY_CACHE_PATH,
+    DEFAULT_SIMILARITY_CACHE_URL,
     TLF_SEMANTIC_MATCH_THRESHOLD,
     _cached_tlf_semantic_similarity,
     _jaccard,
     _load_similarity_cache,
     _normalized_name,
+    _resolve_prediction_artifact,
     _save_similarity_cache,
     _similarity_candidates,
 )
@@ -67,6 +69,18 @@ RETURN p.Team_Lead_Name AS du_team,
 """
 
 SEMANTIC_DID_CANDIDATE_LIMIT = 50
+
+
+def _resolve_recommendation_cache_path(cache_path: Path) -> Path:
+    """Resolve the default shared cache when Git-backed deployments receive an LFS pointer."""
+    if cache_path.resolve() != DEFAULT_SIMILARITY_CACHE_PATH.resolve():
+        return cache_path
+    return _resolve_prediction_artifact(
+        cache_path,
+        DEFAULT_SIMILARITY_CACHE_PATH,
+        "DID_EFFORT_SIMILARITY_CACHE_URL",
+        DEFAULT_SIMILARITY_CACHE_URL,
+    )
 
 
 def _read_query(query: str) -> list[dict[str, Any]]:
@@ -212,6 +226,7 @@ def recommend_teams(
     top_n: int = 3,
 ) -> dict[str, Any]:
     """Rank current DU teams from completed Delivery scope and active workload."""
+    resolved_cache_path = _resolve_recommendation_cache_path(cache_path)
     target = {kind: _unique_items(scope.get(kind, [])) for kind in ("tlfs", "adams", "sdtms")}
     if not any(target.values()):
         raise ValueError("No TLF, ADaM, or SDTM scope was found in the uploaded file.")
@@ -236,7 +251,7 @@ def recommend_teams(
         if row.get("du_team")
     }
     maximum_workload = max(workload.values(), default=0)
-    cache = _load_similarity_cache(cache_path)
+    cache = _load_similarity_cache(resolved_cache_path)
     recommendations = []
     for team, histories in by_team.items():
         history = list(histories.values())
@@ -359,7 +374,7 @@ def recommend_teams(
             else "Backup option" if row["score"] >= 45
             else "Insufficient evidence"
         )
-    _save_similarity_cache(cache, cache_path)
+    _save_similarity_cache(cache, resolved_cache_path)
     return {
         "target_counts": {kind: len(target[kind]) for kind in target},
         "recommendations": recommendations[:top_n],
