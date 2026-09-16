@@ -129,9 +129,15 @@ class AgentPredictionTests(unittest.TestCase):
         self, mock_chat, mock_candidates, mock_predict
     ) -> None:
         history = [{"role": "assistant", "content": "Prior prediction", "prediction": PREDICTION}]
-        mock_chat.return_value = self._parameter_response(
-            "Chen, Zhenchao (Riven)", "C5001001_60", "2026-09-11"
-        )
+        mock_chat.side_effect = [
+            (
+                '{"intent":"effort_prediction"}',
+                {"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6},
+            ),
+            self._parameter_response(
+                "Chen, Zhenchao (Riven)", "C5001001_60", "2026-09-11"
+            ),
+        ]
 
         result = agent.ask("换成 C5001001_60", history=history)
 
@@ -140,7 +146,7 @@ class AgentPredictionTests(unittest.TestCase):
             did="C5001001_60",
             as_of_date="2026-09-11",
         )
-        self.assertEqual(result["usage"]["total_tokens"], 6)
+        self.assertEqual(result["usage"]["total_tokens"], 12)
 
     @patch("agent.predict_effort", return_value=PREDICTION)
     @patch("agent.person_name_candidates", return_value=["Chen, Zhenchao (Riven)"])
@@ -194,10 +200,13 @@ class AgentPredictionTests(unittest.TestCase):
     def test_ask_routes_prediction_without_schema_or_cypher(
         self, mock_chat, mock_candidates, mock_predict
     ) -> None:
-        mock_chat.return_value = self._parameter_response("Riven", "C5001001_59")
+        mock_chat.side_effect = [
+            ('{"intent":"effort_prediction"}', {"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6}),
+            self._parameter_response("Riven", "C5001001_59"),
+        ]
         result = agent.ask("预测 Riven 完成 C5001001_59 需要多少工时？")
 
-        mock_chat.assert_called_once()
+        self.assertEqual(mock_chat.call_count, 2)
         mock_predict.assert_called_once_with(
             person="Riven", did="C5001001_59", as_of_date=None
         )
@@ -210,7 +219,7 @@ class AgentPredictionTests(unittest.TestCase):
         self.assertIn("ADaM 相似度 100%", result["answer"])
         self.assertIn("SDTM 相似度 100%", result["answer"])
         self.assertNotIn("总体相似度", result["answer"])
-        self.assertEqual(result["usage"]["total_tokens"], 6)
+        self.assertEqual(result["usage"]["total_tokens"], 12)
 
     @patch("agent.person_name_candidates", return_value=["Chen, Zhenchao (Riven)"])
     @patch("agent._chat")
@@ -225,6 +234,45 @@ class AgentPredictionTests(unittest.TestCase):
         self.assertEqual(parameters["person"], "Riven")
         self.assertEqual(parameters["did"], "C5001001_59")
         self.assertEqual(usage["total_tokens"], 6)
+
+    @patch("agent.resolve_person_name", return_value="Chen, Zhenchao (Riven)")
+    @patch("agent.person_name_candidates", return_value=["Chen, Zhenchao (Riven)"])
+    @patch("agent.run_cypher", return_value=[{"month": "2026-08", "hours": 58.0}])
+    @patch("agent._chat")
+    def test_llm_routes_natural_workload_request_to_monthly_chart(
+        self, mock_chat, mock_run_cypher, mock_candidates, mock_resolve
+    ) -> None:
+        mock_chat.side_effect = [
+            ('{"intent":"monthly_hours_chart"}', {"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6}),
+            ('{"person":"Riven","did":null}', {"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6}),
+        ]
+
+        result = agent.ask("Riven 最近忙不忙？")
+
+        self.assertEqual(mock_chat.call_count, 2)
+        mock_candidates.assert_called_once_with("Riven 最近忙不忙？")
+        mock_resolve.assert_called_once_with("Riven")
+        self.assertIn("TIME_ON", result["cypher"])
+        self.assertEqual(result["visualization"]["chart_type"], "monthly_hours_chart")
+        self.assertEqual(result["usage"]["total_tokens"], 12)
+
+    @patch("agent.run_cypher", return_value=[{"person": "Person A", "hours": 12.0}])
+    @patch("agent._chat")
+    def test_llm_routes_natural_staffing_request_to_did_chart(
+        self, mock_chat, mock_run_cypher
+    ) -> None:
+        mock_chat.side_effect = [
+            ('{"intent":"did_effort_distribution_chart"}', {"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6}),
+            ('{"person":null,"did":"307-MET-0021-004_1"}', {"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6}),
+        ]
+
+        result = agent.ask("307-MET-0021-004_1 主要是谁做的？")
+
+        self.assertEqual(mock_chat.call_count, 2)
+        self.assertIn("BELONGS_TO", result["cypher"])
+        self.assertEqual(
+            result["visualization"]["chart_type"], "did_effort_distribution_chart"
+        )
 
     @patch(
         "agent._chat",

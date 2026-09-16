@@ -160,9 +160,22 @@ def history_for_ask() -> list[dict]:
     ]
 
 
+def render_visualization(visualization: dict | None) -> None:
+    """Render the fixed chart payload returned by the Agent."""
+    if not visualization or not visualization.get("data"):
+        return
+    st.caption(visualization.get("title", ""))
+    if visualization["chart_type"] == "monthly_hours_chart":
+        st.bar_chart(visualization["data"], x="month", y="hours")
+    elif visualization["chart_type"] == "did_effort_distribution_chart":
+        st.bar_chart(visualization["data"], x="person", y="hours", horizontal=True)
+
+
 def render_message(msg: dict) -> None:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
+        if msg.get("visualization") and msg["role"] == "assistant":
+            render_visualization(msg["visualization"])
         if msg.get("cypher") and st.session_state.show_cypher and msg["role"] == "assistant":
             st.markdown(f'<div class="cypher-box">{msg["cypher"]}</div>', unsafe_allow_html=True)
         if msg.get("usage") and msg["role"] == "assistant":
@@ -198,6 +211,7 @@ def complete_pending_turn() -> None:
                 usage = result.get("usage") or empty_usage()
                 st.session_state.token_usage = add_usage(st.session_state.token_usage, usage)
                 st.markdown(answer)
+                render_visualization(result.get("visualization"))
                 if cypher and st.session_state.show_cypher:
                     st.markdown(f'<div class="cypher-box">{cypher}</div>', unsafe_allow_html=True)
                 st.caption(
@@ -211,6 +225,7 @@ def complete_pending_turn() -> None:
                         "cypher": cypher,
                         "usage": usage,
                         "prediction": result.get("prediction"),
+                        "visualization": result.get("visualization"),
                     }
                 )
             except Exception as exc:  # noqa: BLE001

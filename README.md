@@ -82,6 +82,16 @@ Predict a planned or ongoing assignment:
 py effort_prediction.py predict --model artifacts\did_effort_model.joblib --person "Chen, Sizhen" --did "DID123"
 ```
 
+Export a dated CSV snapshot for every assigned DID whose current Neo4j status is
+`ongoing`:
+
+```cmd
+py effort_prediction.py export-ongoing --output data\ongoing_did_predictions.csv --model artifacts\did_effort_model.joblib
+```
+
+The CSV contains one `Person x DID` row per assignment, the V3 P50/P80/P90
+forecast, planned delivery date, model version, and key similarity diagnostics.
+
 Use `--as-of-date YYYY-MM-DD` for a historical/current-state forecast. Only
 completed records strictly before that date contribute to personal efficiency
 and similarity features. Generated exports and model artifacts are gitignored.
@@ -96,11 +106,16 @@ Streamlit chat automatically routes explicit prediction questions to the model:
 Predict Riven's effort for C5001001_59.
 ```
 
-The Agent parses common Chinese and English prediction requests locally. It
-uses Vox only as a fallback for complex parameter wording. Python loads the
-cached model and computes P50/P80/P90; the LLM does not calculate or alter
-prediction values. Ordinary historical-hours and Neo4j questions continue
-through the existing read-only Text-to-Cypher flow.
+Every request first uses Vox to return one constrained intent:
+`effort_prediction`, `monthly_hours_chart`, `did_effort_distribution_chart`,
+or `neo4j_query`. The two chart intents make a second constrained Vox call to
+extract the required person or DID, then use fixed read-only Cypher and a
+Streamlit chart. This supports natural requests such as "Riven 最近忙不忙？"
+and "C1071007_141 主要是谁做的？" without letting the LLM generate chart
+queries. Prediction requests continue with their separate LLM-first parameter
+extraction, Neo4j validation, and V3 model calculation. Python computes
+P50/P80/P90; the LLM does not calculate or alter prediction values. Other
+questions continue through the existing read-only Text-to-Cypher flow.
 
 ### RSC model artifact loading
 

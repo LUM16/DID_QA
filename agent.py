@@ -8,7 +8,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from effort_prediction import person_name_candidates, predict_effort
+from effort_prediction import person_name_candidates, predict_effort, resolve_person_name
 from neo4j_client import get_schema, load_env, run_cypher
 from vox_client import add_usage, chat as _chat, empty_usage
 
@@ -62,7 +62,9 @@ EFFORT_PREDICTION_PATTERNS = (
     r"\bhow long will\b",
     r"\bexpected (?:effort|hours?|time)\b",
 )
-DID_PATTERN = re.compile(r"(?<![A-Za-z0-9_])[A-Za-z][A-Za-z0-9-]*_\d+(?![A-Za-z0-9_])")
+DID_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9_])[A-Za-z0-9][A-Za-z0-9-]*_\d+(?![A-Za-z0-9_])"
+)
 ISO_DATE_PATTERN = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
 PERSON_REFERENCE_PATTERN = re.compile(
     r"^(?:他|她|这个人|该人员|上述人员|上面的人|那个人|"
@@ -184,6 +186,47 @@ Current request:
     if intent not in {"effort_prediction", "neo4j_query"}:
         raise ValueError("Intent classifier returned an unsupported intent.")
     return intent == "effort_prediction", usage
+
+
+def classify_request_intent(
+    question: str, history: list[dict[str, Any]] | None = None
+) -> tuple[str, dict[str, int]]:
+    """Classify every request before routing it to a fixed or generative flow."""
+    history_text = "\n".join(
+        f"{message['role']}: {message['content']}" for message in (history or [])[-6:]
+    )
+    context = _latest_prediction_context(history)
+    system = """Classify the user's DID application request.
+Return exactly one JSON object with an intent selected from:
+- "effort_prediction": estimate future total hands-on hours for a person and DID.
+- "monthly_hours_chart": show a person's historical recorded TIME_ON hours over time.
+- "did_effort_distribution_chart": show recorded TIME_ON hours split among people for one DID.
+- "neo4j_query": every other graph-data request.
+
+Use monthly_hours_chart for natural workload/history/trend requests even when the
+user does not explicitly say "chart". Use did_effort_distribution_chart for
+natural staffing, contribution, ownership, or effort-breakdown requests for a
+specific DID. Do not choose either chart intent for future estimates. Do not
+calculate values or add explanation."""
+    user = f"""Prediction context:
+{json.dumps(context, ensure_ascii=False) if context else "(none)"}
+
+Recent conversation:
+{history_text or "(none)"}
+
+Current request:
+{question}"""
+    raw, usage = _chat(system, user, temperature=0)
+    intent = _extract_json_object(raw).get("intent")
+    valid_intents = {
+        "effort_prediction",
+        "monthly_hours_chart",
+        "did_effort_distribution_chart",
+        "neo4j_query",
+    }
+    if intent not in valid_intents:
+        raise ValueError("Intent classifier returned an unsupported intent.")
+    return intent, usage
 
 
 def _extract_json_object(text: str) -> dict[str, Any]:
@@ -340,6 +383,106 @@ Current request:
         "did": did.strip(),
         "as_of_date": as_of_date,
     }, usage
+
+
+def extract_chart_parameters(
+    question: str,
+    intent: str,
+    history: list[dict[str, Any]] | None = None,
+) -> tuple[dict[str, str], dict[str, int]]:
+    """Extract the entity required by a fixed chart after LLM intent routing."""
+    if intent not in {"monthly_hours_chart", "did_effort_distribution_chart"}:
+        raise ValueError(f"Unsupported chart intent: {intent}.")
+    candidates = person_name_candidates(question) if intent == "monthly_hours_chart" else []
+    history_text = "\n".join(
+        f"{message['role']}: {message['content']}" for message in (history or [])[-6:]
+    )
+    required = "person" if intent == "monthly_hours_chart" else "did"
+    system = f"""Extract the required entity for a DID fixed chart request.
+Return exactly one JSON object: {{"person": string|null, "did": string|null}}.
+The required field is "{required}".
+For a person, choose an exact official Neo4j Person.Name from the supplied
+candidates when possible. For a DID, copy its identifier exactly. Use conversation
+history only to resolve an explicit reference. Do not invent values or add text."""
+    user = f"""Intent: {intent}
+Official Neo4j Person.Name candidates:
+{json.dumps(candidates, ensure_ascii=False)}
+
+Recent conversation:
+{history_text or "(none)"}
+
+Current request:
+{question}"""
+    raw, usage = _chat(system, user, temperature=0)
+    payload = _extract_json_object(raw)
+    value = payload.get(required)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"The chart request is missing a {required}.")
+    if required == "person":
+        return {"person": resolve_person_name(value.strip())}, usage
+    did = value.strip()
+    if not DID_PATTERN.fullmatch(did):
+        raise ValueError(f"The chart request contains an invalid DID: {did!r}.")
+    return {"did": did}, usage
+
+
+def _cypher_string(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("'", "\\'")
+
+
+def answer_fixed_chart(
+    intent: str,
+    parameters: dict[str, str],
+    question: str,
+    schema: dict[str, Any] | None,
+    initial_usage: dict[str, int],
+) -> dict[str, Any]:
+    """Run the fixed, read-only query and return a structured chart payload."""
+    if intent == "monthly_hours_chart":
+        person = _cypher_string(parameters["person"])
+        cypher = f"""
+MATCH (p:Person {{Name: '{person}'}})-[time:TIME_ON]->(:DIDN_Month)
+WITH substring(toString(time.From_Date), 0, 7) AS month,
+     sum(toFloat(time.Hour)) AS hours
+WHERE month IS NOT NULL AND month <> ''
+RETURN month, round(hours, 1) AS hours
+ORDER BY month
+"""
+        title = f"{parameters['person']} monthly recorded hours"
+    elif intent == "did_effort_distribution_chart":
+        did = _cypher_string(parameters["did"])
+        cypher = f"""
+MATCH (p:Person)-[time:TIME_ON]->(:DIDN_Month)-[:BELONGS_TO]->(d:Delivery)
+WHERE toString(d.DID) = '{did}'
+RETURN p.Name AS person, round(sum(toFloat(time.Hour)), 1) AS hours
+ORDER BY hours DESC, person
+"""
+        title = f"{parameters['did']} person effort distribution"
+    else:
+        raise ValueError(f"Unsupported chart intent: {intent}.")
+    rows = run_cypher(cypher)
+    chinese = bool(re.search(r"[\u4e00-\u9fff]", question))
+    if intent == "monthly_hours_chart":
+        answer = (
+            f"已展示 **{parameters['person']}** 的月度已记录工时趋势。"
+            if chinese
+            else f"Showing monthly recorded-hours trend for **{parameters['person']}**."
+        )
+    else:
+        answer = (
+            f"已展示 DID **{parameters['did']}** 的人员投入分布。"
+            if chinese
+            else f"Showing person effort distribution for DID **{parameters['did']}**."
+        )
+    return {
+        "answer": answer,
+        "cypher": cypher.strip(),
+        "rows": rows,
+        "schema": schema,
+        "error": None,
+        "usage": initial_usage,
+        "visualization": {"chart_type": intent, "title": title, "data": rows},
+    }
 
 
 def _prediction_confidence(
@@ -671,8 +814,8 @@ def ask(
     schema: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     load_env()
-    is_prediction, intent_usage = classify_effort_prediction_intent(question, history)
-    if is_prediction:
+    intent, intent_usage = classify_request_intent(question, history)
+    if intent == "effort_prediction":
         try:
             result = answer_effort_prediction(
                 question, history, initial_usage=intent_usage
@@ -688,6 +831,28 @@ def ask(
                 "schema": schema,
                 "error": error,
                 "usage": empty_usage(),
+            }
+    if intent in {"monthly_hours_chart", "did_effort_distribution_chart"}:
+        try:
+            parameters, parameter_usage = extract_chart_parameters(
+                question, intent, history
+            )
+            return answer_fixed_chart(
+                intent,
+                parameters,
+                question,
+                schema,
+                add_usage(intent_usage, parameter_usage),
+            )
+        except Exception as exc:  # noqa: BLE001
+            error = str(exc)
+            return {
+                "answer": f"Chart request failed: {error}",
+                "cypher": "",
+                "rows": [],
+                "schema": schema,
+                "error": error,
+                "usage": intent_usage,
             }
 
     schema = schema or get_schema()
