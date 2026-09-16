@@ -139,13 +139,22 @@ LLM does not calculate or alter prediction values.
 
 The **Recommend DU Team** tab accepts a new Delivery scope as either an Excel
 workbook with `TLF` and `Data` sheets, or paired `TLF` and `Data` CSV files.
-It does not train a model or write to Neo4j. Instead, Python ranks current
-`Person.Team_Lead_Name` groups using completed-DID scope evidence: cached TLF
-semantic coverage, exact ADaM/SDTM coverage, similar completed DID counts,
-recency, and the current count of planned/ongoing DIDs. The shared
-`did_effort_similarity_cache.joblib` is reused and updated to avoid repeating
-TLF comparisons. Recommendations are decision support only; review displayed
-scope gaps and similar historical DIDs before assigning work.
+It does not train a model or write uploaded scope to Neo4j. Instead, Python
+ranks current `Person.Team_Lead_Name` groups using a manually refreshed local
+snapshot of completed-DID scope evidence and active workload. Refresh it after
+each Neo4j update:
+
+```cmd
+py du_team_recommendation.py refresh-history
+```
+
+The UI never queries Neo4j during a recommendation; it reads this snapshot and
+the shared `did_effort_similarity_cache.joblib`. Recommendations are decision
+support only; review the displayed snapshot time, scope gaps, and similar
+historical DIDs before assigning work. Set `DU_TEAM_HISTORY_SNAPSHOT_PATH` to
+use a persistent writable snapshot location in RSC. When using the default
+Git-tracked snapshot, RSC automatically downloads its full Git LFS content on
+first use. `DU_TEAM_HISTORY_SNAPSHOT_URL` can override its download URL.
 See the full [DU Team recommendation metric definition](docs/du_team_recommendation.md).
 
 The presentation layer labels only unambiguous returned fields: `hours`,

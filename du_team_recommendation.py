@@ -2,16 +2,21 @@
 
 from __future__ import annotations
 
+import argparse
 import csv
 import io
+import os
 from collections import defaultdict
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Iterable
 
+import joblib
+
 from effort_prediction import (
     DEFAULT_SIMILARITY_CACHE_PATH,
     DEFAULT_SIMILARITY_CACHE_URL,
+    GITHUB_ARTIFACT_BASE_URL,
     TLF_SEMANTIC_MATCH_THRESHOLD,
     _cached_tlf_semantic_similarity,
     _jaccard,
@@ -69,6 +74,13 @@ RETURN p.Team_Lead_Name AS du_team,
 """
 
 SEMANTIC_DID_CANDIDATE_LIMIT = 50
+DU_HISTORY_SNAPSHOT_VERSION = "du-team-history-v1"
+DEFAULT_DU_HISTORY_SNAPSHOT_PATH = (
+    Path(__file__).resolve().parent / "artifacts" / "du_team_history_snapshot.joblib"
+)
+DEFAULT_DU_HISTORY_SNAPSHOT_URL = (
+    f"{GITHUB_ARTIFACT_BASE_URL}/du_team_history_snapshot.joblib"
+)
 
 
 def _resolve_recommendation_cache_path(cache_path: Path) -> Path:
@@ -87,11 +99,85 @@ def _read_query(query: str) -> list[dict[str, Any]]:
     load_env()
     driver = get_driver()
     try:
-        database = __import__("os").environ.get("NEO4J_DATABASE", "neo4j")
+        database = os.environ.get("NEO4J_DATABASE", "neo4j")
         with driver.session(database=database) as session:
             return session.execute_read(lambda tx: tx.run(query).data())
     finally:
         driver.close()
+
+
+def _history_snapshot_path() -> Path:
+    configured_path = os.environ.get("DU_TEAM_HISTORY_SNAPSHOT_PATH")
+    return Path(configured_path) if configured_path else DEFAULT_DU_HISTORY_SNAPSHOT_PATH
+
+
+def _resolve_history_snapshot_path(snapshot_path: Path) -> Path:
+    """Resolve the default snapshot when Git-backed deployments receive an LFS pointer."""
+    if snapshot_path.resolve() != DEFAULT_DU_HISTORY_SNAPSHOT_PATH.resolve():
+        return snapshot_path
+    return _resolve_prediction_artifact(
+        snapshot_path,
+        DEFAULT_DU_HISTORY_SNAPSHOT_PATH,
+        "DU_TEAM_HISTORY_SNAPSHOT_URL",
+        DEFAULT_DU_HISTORY_SNAPSHOT_URL,
+    )
+
+
+def refresh_history_snapshot(
+    output_path: Path = DEFAULT_DU_HISTORY_SNAPSHOT_PATH,
+) -> dict[str, Any]:
+    """Fetch current Neo4j DU evidence and save it as a reusable local snapshot."""
+    history_rows = _read_query(TEAM_HISTORY_QUERY)
+    if not history_rows:
+        raise ValueError("Neo4j returned no completed DU team history to cache.")
+    workload_rows = _read_query(TEAM_WORKLOAD_QUERY)
+    snapshot = {
+        "version": DU_HISTORY_SNAPSHOT_VERSION,
+        "generated_at": datetime.now().astimezone().isoformat(),
+        "history_rows": history_rows,
+        "workload_rows": workload_rows,
+    }
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = output_path.with_suffix(output_path.suffix + ".tmp")
+    joblib.dump(snapshot, temporary_path)
+    temporary_path.replace(output_path)
+    return {
+        "path": str(output_path.resolve()),
+        "generated_at": snapshot["generated_at"],
+        "history_row_count": len(history_rows),
+        "workload_row_count": len(workload_rows),
+    }
+
+
+def load_history_snapshot(
+    snapshot_path: Path | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+    """Load a manually refreshed DU history snapshot without querying Neo4j."""
+    path = _resolve_history_snapshot_path(snapshot_path or _history_snapshot_path())
+    if not path.exists():
+        raise FileNotFoundError(
+            f"DU history snapshot is unavailable: {path.resolve()}. "
+            "Run `python du_team_recommendation.py refresh-history` after Neo4j updates."
+        )
+    snapshot = joblib.load(path)
+    if (
+        not isinstance(snapshot, dict)
+        or snapshot.get("version") != DU_HISTORY_SNAPSHOT_VERSION
+        or not isinstance(snapshot.get("history_rows"), list)
+        or not isinstance(snapshot.get("workload_rows"), list)
+        or not isinstance(snapshot.get("generated_at"), str)
+    ):
+        raise ValueError(f"Invalid DU history snapshot: {path.resolve()}")
+    return (
+        snapshot["history_rows"],
+        snapshot["workload_rows"],
+        {
+            "path": str(path.resolve()),
+            "generated_at": snapshot["generated_at"],
+            "history_row_count": len(snapshot["history_rows"]),
+            "workload_row_count": len(snapshot["workload_rows"]),
+        },
+    )
 
 
 def _column(row: dict[str, Any], name: str) -> str:
@@ -387,9 +473,43 @@ def recommend_teams(
 
 
 def recommend_uploaded_scope(primary_file: Any, data_csv_file: Any | None = None) -> dict[str, Any]:
-    """Load an uploaded scope and retrieve current Neo4j evidence for ranking."""
-    return recommend_teams(
+    """Load an uploaded scope and rank it against the locally cached DU history."""
+    history_rows, workload_rows, snapshot = load_history_snapshot()
+    result = recommend_teams(
         load_uploaded_scope(primary_file, data_csv_file),
-        _read_query(TEAM_HISTORY_QUERY),
-        _read_query(TEAM_WORKLOAD_QUERY),
+        history_rows,
+        workload_rows,
     )
+    result["history_snapshot"] = snapshot
+    return result
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Refresh the local Neo4j evidence snapshot used by DU recommendations."
+    )
+    subcommands = parser.add_subparsers(dest="command", required=True)
+    refresh_parser = subcommands.add_parser(
+        "refresh-history",
+        help="Query Neo4j once and write the DU history snapshot used by the UI.",
+    )
+    refresh_parser.add_argument(
+        "--output",
+        type=Path,
+        default=_history_snapshot_path(),
+        help="Snapshot output path (default: artifacts/du_team_history_snapshot.joblib).",
+    )
+    arguments = parser.parse_args()
+    if arguments.command == "refresh-history":
+        details = refresh_history_snapshot(arguments.output)
+        print(
+            "DU history snapshot refreshed: "
+            f"{details['history_row_count']:,} history rows, "
+            f"{details['workload_row_count']:,} workload rows."
+        )
+        print(f"Generated at: {details['generated_at']}")
+        print(f"Path: {details['path']}")
+
+
+if __name__ == "__main__":
+    main()

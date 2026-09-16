@@ -33,9 +33,27 @@
 空标题或空 dataset/domain 名称不会进入计算。名称会进行大小写和标点标准化，
 避免纯格式差异导致不匹配。
 
-### Neo4j 历史数据
+### Neo4j 历史 snapshot
 
-每个候选 DU 使用下列当前数据库数据：
+页面推荐不会实时查询 Neo4j，而是读取手动刷新得到的本地 DU history snapshot。每次
+Neo4j 数据更新后，运行：
+
+```text
+python du_team_recommendation.py refresh-history
+```
+
+默认 snapshot 路径为：
+
+```text
+artifacts/du_team_history_snapshot.joblib
+```
+
+在 RSC 中可以通过 `DU_TEAM_HISTORY_SNAPSHOT_PATH` 指向持久化、可写的位置。页面显示
+snapshot 的生成时间和 completed DU-DID record 数，帮助人工判断数据新鲜度。
+默认 Git 版本中的 snapshot 如果是 Git LFS pointer，RSC 会在首次推荐时自动下载完整
+内容到可写 artifact cache；可通过 `DU_TEAM_HISTORY_SNAPSHOT_URL` 覆盖下载地址。
+
+刷新命令一次性读取下列当前数据库数据：
 
 - `Person.Team_Lead_Name`：将人员归入 DU；
 - `Person -[:WORKS_ON]-> Delivery`：该 DU 成员参与的 DID；

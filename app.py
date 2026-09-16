@@ -347,6 +347,11 @@ def render_team_recommendation() -> None:
     left.metric("Target TLFs", counts["tlfs"])
     middle.metric("Target ADaM", counts["adams"])
     right.metric("Target SDTM", counts["sdtms"])
+    snapshot = result["history_snapshot"]
+    st.caption(
+        f"DU history snapshot: {snapshot['generated_at']} · "
+        f"{snapshot['history_row_count']:,} completed DU-DID rows."
+    )
 
     recommendations = result["recommendations"]
     if not recommendations:

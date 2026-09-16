@@ -9,13 +9,56 @@ from unittest.mock import patch
 
 from du_team_recommendation import (
     DEFAULT_SIMILARITY_CACHE_PATH,
+    DEFAULT_DU_HISTORY_SNAPSHOT_PATH,
+    _resolve_history_snapshot_path,
     _resolve_recommendation_cache_path,
     _scope_from_rows,
+    load_history_snapshot,
     recommend_teams,
+    refresh_history_snapshot,
 )
 
 
 class TeamRecommendationTests(unittest.TestCase):
+    def test_default_history_snapshot_uses_artifact_resolver(self) -> None:
+        resolved_path = Path("C:/temporary/du-history.joblib")
+        with patch(
+            "du_team_recommendation._resolve_prediction_artifact",
+            return_value=resolved_path,
+        ) as resolver:
+            self.assertEqual(
+                _resolve_history_snapshot_path(DEFAULT_DU_HISTORY_SNAPSHOT_PATH),
+                resolved_path,
+            )
+        resolver.assert_called_once()
+
+    def test_refresh_and_load_history_snapshot(self) -> None:
+        history_rows = [{"du_team": "Team A", "did": "DID-A"}]
+        workload_rows = [{"du_team": "Team A", "active_did_count": 2}]
+        with tempfile.TemporaryDirectory() as directory:
+            snapshot_path = Path(directory) / "du-history.joblib"
+            with patch(
+                "du_team_recommendation._read_query",
+                side_effect=[history_rows, workload_rows],
+            ):
+                saved = refresh_history_snapshot(snapshot_path)
+            loaded_history, loaded_workload, details = load_history_snapshot(snapshot_path)
+        self.assertEqual(loaded_history, history_rows)
+        self.assertEqual(loaded_workload, workload_rows)
+        self.assertEqual(saved["history_row_count"], 1)
+        self.assertEqual(details["workload_row_count"], 1)
+
+    def test_loading_missing_history_snapshot_explains_refresh_command(self) -> None:
+        missing_path = Path("C:/temporary/missing-du-history.joblib")
+        with self.assertRaisesRegex(FileNotFoundError, "refresh-history"):
+            load_history_snapshot(missing_path)
+
+    def test_custom_history_snapshot_does_not_use_artifact_resolver(self) -> None:
+        custom_path = Path("C:/temporary/custom-du-history.joblib")
+        with patch("du_team_recommendation._resolve_prediction_artifact") as resolver:
+            self.assertEqual(_resolve_history_snapshot_path(custom_path), custom_path)
+        resolver.assert_not_called()
+
     def test_default_cache_uses_artifact_resolver(self) -> None:
         resolved_path = Path("C:/temporary/similarity.joblib")
         with patch(
