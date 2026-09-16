@@ -11,6 +11,7 @@ Uses network Neo4j + Pfizer Vox GenAI.
 |------|------|
 | `app.py` | Streamlit entry point (publish this) |
 | `agent.py` | NL → Cypher → answer (loads domain docs/examples for few-shot prompting) |
+| `result_presentation.py` | Validates a constrained, post-query table/chart selection |
 | `neo4j_client.py` | Read-only Neo4j access |
 | `vox_client.py` | Vox OAuth + chat completions + model listing |
 | `docs/skill.md` | DID query skill rules |
@@ -106,20 +107,24 @@ Streamlit chat automatically routes explicit prediction questions to the model:
 Predict Riven's effort for C5001001_59.
 ```
 
-Every request first uses Vox to return one constrained intent:
-`effort_prediction`, `monthly_hours_chart`, `did_effort_distribution_chart`,
-or `neo4j_query`. The two chart intents make a second constrained Vox call to
-extract the required person or DID, then use fixed read-only Cypher and a
-Streamlit chart. This supports natural requests such as "Riven 最近忙不忙？"
-and "C1071007_141 主要是谁做的？" without letting the LLM generate chart
-queries. Prediction requests continue with their separate LLM-first parameter
-extraction, Neo4j validation, and V3 model calculation. Python computes
-P50/P80/P90; the LLM does not calculate or alter prediction values. Other
-questions continue through the existing read-only Text-to-Cypher flow.
+Explicit effort-prediction requests use a constrained intent and parameter
+extraction flow. Every other graph-data question uses the existing generic,
+read-only Text-to-Cypher flow: Vox generates Cypher, Neo4j returns rows, and a
+separate constrained Vox call may select a table or safe chart from those exact
+returned fields. Python rejects unknown fields, transformed values, and charts
+with missing, non-numeric, or non-finite numeric data. A chart always includes
+a table fallback; a selection failure simply omits presentation and never fails
+an otherwise successful Q&A response. See
+[`docs/post_query_presentation.md`](docs/post_query_presentation.md).
 
-The DID person-effort chart uses recorded `TIME_ON.Hour` when it exists. For an
-ongoing DID without recorded hours, it instead shows the assigned `WORKS_ON`
-people by task count and labels that fallback clearly.
+Prediction requests continue with their separate LLM-first parameter extraction,
+Neo4j validation, and V3 model calculation. Python computes P50/P80/P90; the
+LLM does not calculate or alter prediction values.
+
+The presentation layer labels only unambiguous returned fields: `hours`,
+`recorded_hours`, and `time_on_hours` mean recorded `TIME_ON` hours;
+`task_count` means assigned task count. It does not infer units for other
+fields.
 
 ### RSC model artifact loading
 

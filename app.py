@@ -161,26 +161,59 @@ def history_for_ask() -> list[dict]:
 
 
 def render_visualization(visualization: dict | None) -> None:
-    """Render the fixed chart payload returned by the Agent."""
+    """Render legacy chart payloads and validated post-query chart payloads."""
     if not visualization or not visualization.get("data"):
         return
     st.caption(visualization.get("title", ""))
-    if visualization["chart_type"] == "monthly_hours_chart":
+    chart_type = visualization.get("chart_type")
+    if chart_type == "monthly_hours_chart":
         st.bar_chart(visualization["data"], x="month", y="hours")
-    elif visualization["chart_type"] == "did_effort_distribution_chart":
+    elif chart_type == "did_effort_distribution_chart":
         st.bar_chart(
             visualization["data"],
             x="person",
             y=visualization.get("value_field", "hours"),
             horizontal=True,
         )
+    elif chart_type in {"bar", "line"}:
+        x = visualization.get("x")
+        y = visualization.get("y")
+        if not x or not y:
+            return
+        kwargs = {"x": x, "y": y}
+        if visualization.get("series"):
+            kwargs["color"] = visualization["series"]
+        try:
+            if chart_type == "line":
+                st.line_chart(visualization["data"], **kwargs)
+            else:
+                kwargs["horizontal"] = visualization.get("horizontal", False)
+                if visualization.get("stack") is not None:
+                    kwargs["stack"] = visualization["stack"]
+                st.bar_chart(visualization["data"], **kwargs)
+        except (KeyError, TypeError, ValueError):
+            st.info("The returned chart fields could not be rendered; see the table below.")
+
+
+def render_result_presentation(presentation: dict | None) -> None:
+    """Render the optional chart and its always-safe table fallback."""
+    if not presentation:
+        return
+    render_visualization(presentation)
+    table = presentation.get("table") or {}
+    if table.get("columns"):
+        st.dataframe(table["rows"], use_container_width=True, hide_index=True)
+    if presentation.get("data_note"):
+        st.caption(presentation["data_note"])
 
 
 def render_message(msg: dict) -> None:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
         if msg.get("visualization") and msg["role"] == "assistant":
-            render_visualization(msg["visualization"])
+            render_result_presentation(msg["visualization"])
+        if msg.get("presentation_warning") and msg["role"] == "assistant":
+            st.caption(msg["presentation_warning"])
         if msg.get("cypher") and st.session_state.show_cypher and msg["role"] == "assistant":
             st.markdown(f'<div class="cypher-box">{msg["cypher"]}</div>', unsafe_allow_html=True)
         if msg.get("usage") and msg["role"] == "assistant":
@@ -216,7 +249,9 @@ def complete_pending_turn() -> None:
                 usage = result.get("usage") or empty_usage()
                 st.session_state.token_usage = add_usage(st.session_state.token_usage, usage)
                 st.markdown(answer)
-                render_visualization(result.get("visualization"))
+                render_result_presentation(result.get("visualization"))
+                if result.get("presentation_warning"):
+                    st.caption(result["presentation_warning"])
                 if cypher and st.session_state.show_cypher:
                     st.markdown(f'<div class="cypher-box">{cypher}</div>', unsafe_allow_html=True)
                 st.caption(
@@ -231,6 +266,7 @@ def complete_pending_turn() -> None:
                         "usage": usage,
                         "prediction": result.get("prediction"),
                         "visualization": result.get("visualization"),
+                        "presentation_warning": result.get("presentation_warning"),
                     }
                 )
             except Exception as exc:  # noqa: BLE001
@@ -274,7 +310,7 @@ with st.sidebar:
     st.caption(
         f"Prompt: {u.get('prompt_tokens', 0)} · Completion: {u.get('completion_tokens', 0)}"
     )
-    st.caption("Each question usually uses 2 LLM calls (Cypher + answer).")
+    st.caption("Normal Q&A usually uses 3 LLM calls (Cypher + answer + presentation).")
 
 in_conversation = bool(st.session_state.messages)
 
