@@ -92,6 +92,31 @@ class ResultPresentationTests(unittest.TestCase):
             )
         )
 
+    @patch("agent.run_cypher", return_value=[{"month": "2026-09", "hours": 5.0}])
+    @patch("agent._chat")
+    def test_structured_presentation_suppresses_duplicate_row_answer(
+        self, mock_chat, _mock_run_cypher
+    ) -> None:
+        mock_chat.side_effect = [
+            ("```cypher\nMATCH (n) RETURN '2026-09' AS month, 5.0 AS hours\n```", {}),
+            (
+                '{"display_type":"line","x_field":"month","y_fields":["hours"],'
+                '"series_field":null,"table_fields":["month","hours"]}',
+                {},
+            ),
+            ("September recorded hours were 5.0.", {"total_tokens": 4}),
+        ]
+        with patch(
+            "agent.classify_effort_prediction_intent",
+            return_value=(False, {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}),
+        ):
+            result = agent.ask("Show monthly hours", schema={"labels": []})
+
+        answer_prompt = mock_chat.call_args_list[2].args[0]
+        self.assertIn("do not output a markdown table", answer_prompt)
+        self.assertEqual(result["answer"], "September recorded hours were 5.0.")
+        self.assertIsNotNone(result["visualization"])
+
     @patch("agent.run_cypher", return_value=[{"study": "C100", "delivery_count": 2}])
     @patch("agent._chat")
     def test_failed_presentation_selection_does_not_fail_generic_qa(
@@ -99,8 +124,8 @@ class ResultPresentationTests(unittest.TestCase):
     ) -> None:
         mock_chat.side_effect = [
             ("```cypher\nMATCH (s:Study) RETURN s.Name AS study, 2 AS delivery_count\n```", {}),
-            ("C100 has two deliveries.", {"total_tokens": 4}),
             RuntimeError("presentation service unavailable"),
+            ("C100 has two deliveries.", {"total_tokens": 4}),
         ]
         with patch(
             "agent.classify_effort_prediction_intent",

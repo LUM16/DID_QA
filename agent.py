@@ -618,15 +618,28 @@ Generate a corrected read-only Cypher query."""
     return _extract_cypher(raw), usage
 
 
-def answer_from_rows(question: str, cypher: str, rows: list[dict[str, Any]]) -> tuple[str, dict[str, int]]:
+def answer_from_rows(
+    question: str,
+    cypher: str,
+    rows: list[dict[str, Any]],
+    *,
+    structured_presentation: bool = False,
+) -> tuple[str, dict[str, int]]:
     payload = json.dumps(rows[:80], ensure_ascii=False, default=str)
+    detail_rule = (
+        "A validated chart or table will render the row details separately. Give only "
+        "a direct, concise conclusion in at most two sentences; do not output a "
+        "markdown table, list, or repeat individual rows."
+        if structured_presentation
+        else "For multiple rows, use a concise list or table-style markdown."
+    )
     system = f"""You are a Neo4j graph Q&A assistant. Answer from the query results in clear natural language.
 Rules:
 1. {LANGUAGE_RULE}
 2. Lead with the direct answer, then add brief supporting detail if useful.
 3. Never invent data that is not in the results.
 4. If results are empty, explain likely reasons (wrong ID, property name, or no matching data).
-5. For multiple rows, use a concise list or table-style markdown.
+5. {detail_rule}
 6. Keep property/field names from the database as-is when citing them."""
 
     user = f"""User question: {question}
@@ -710,14 +723,19 @@ def ask(
                 rows = run_cypher(repaired)
                 cypher = repaired
 
-            answer, u2 = answer_from_rows(question, cypher, rows)
-            usage = add_usage(usage, u2)
             visualization, presentation_usage, presentation_warning = select_result_presentation(
                 question,
                 rows,
                 chat=lambda system, user: _chat(system, user, temperature=0),
             )
             usage = add_usage(usage, presentation_usage)
+            answer, u2 = answer_from_rows(
+                question,
+                cypher,
+                rows,
+                structured_presentation=visualization is not None,
+            )
+            usage = add_usage(usage, u2)
             return {
                 "answer": answer,
                 "cypher": cypher,
