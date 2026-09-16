@@ -157,6 +157,19 @@ Git-tracked snapshot, RSC automatically downloads its full Git LFS content on
 first use. `DU_TEAM_HISTORY_SNAPSHOT_URL` can override its download URL.
 See the full [DU Team recommendation metric definition](docs/du_team_recommendation.md).
 
+### TLF-only person allocation
+
+The **Allocate TLF People** tab uses the same Excel/CSV upload format but only
+its TLF rows, and recommends distinct Generation/QC primaries plus backups from
+a separate manually refreshed Person × TLF evidence snapshot:
+
+```cmd
+py tlf_person_allocation.py refresh-snapshot
+```
+
+It never queries Neo4j at UI runtime. See [TLF person allocation](docs/tlf_person_allocation.md)
+for snapshot schema, strict LLM Team Lead validation, scoring, and balancing.
+
 The presentation layer labels only unambiguous returned fields: `hours`,
 `recorded_hours`, and `time_on_hours` mean recorded `TIME_ON` hours;
 `task_count` means assigned task count. It does not infer units for other

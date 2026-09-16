@@ -424,6 +424,122 @@ def render_team_recommendation() -> None:
     )
 
 
+def render_tlf_person_allocation() -> None:
+    """Render snapshot-only Generation/QC allocation for uploaded TLFs."""
+    st.subheader("Allocate TLF People")
+    st.caption(
+        "Match a DU Team Lead to the manually refreshed snapshot, then recommend "
+        "Generation and QC people from completed TLF role evidence. This tab never queries Neo4j."
+    )
+    st.info(
+        "Primary balancing: each prior primary allocation reduces that person's next "
+        "primary score by 12 points, helping avoid concentration in one person."
+    )
+    st.markdown("**Example input — `C5001001_61.xlsx`**")
+    if EXAMPLE_DU_SCOPE_PATH.exists():
+        st.download_button(
+            "Download example input",
+            data=EXAMPLE_DU_SCOPE_PATH.read_bytes(),
+            file_name=EXAMPLE_DU_SCOPE_PATH.name,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+            key="tlf_allocation_example",
+        )
+    team_lead_input = st.text_input(
+        "DU Team Lead name",
+        placeholder="Enter the Team Lead name to match against the snapshot",
+        key="tlf_allocation_team_lead",
+    )
+    primary_file = st.file_uploader(
+        "Delivery scope workbook or TLF CSV",
+        type=["xlsx", "csv"],
+        key="tlf_allocation_primary",
+    )
+    data_csv_file = None
+    if primary_file and primary_file.name.lower().endswith(".csv"):
+        data_csv_file = st.file_uploader(
+            "Data CSV", type=["csv"], key="tlf_allocation_data"
+        )
+    if not primary_file:
+        return
+    upload_key = (
+        team_lead_input.strip(),
+        primary_file.name,
+        len(primary_file.getvalue()),
+        data_csv_file.name if data_csv_file else "",
+        len(data_csv_file.getvalue()) if data_csv_file else 0,
+    )
+    if st.button("Allocate TLF people", type="primary", use_container_width=True):
+        if not team_lead_input.strip():
+            st.error("Enter a DU Team Lead name.")
+            return
+        try:
+            from tlf_person_allocation import allocate_uploaded_tlfs
+
+            with st.spinner("Validating the Team Lead and comparing completed TLF role evidence..."):
+                result = allocate_uploaded_tlfs(
+                    team_lead_input, primary_file, data_csv_file
+                )
+            st.session_state.tlf_person_allocation = result
+            st.session_state.tlf_person_allocation_input = upload_key
+        except (RuntimeError, ValueError, FileNotFoundError) as exc:
+            st.error(str(exc))
+            return
+        except Exception as exc:  # noqa: BLE001
+            st.error(f"TLF person allocation failed: {exc}")
+            return
+    result = st.session_state.get("tlf_person_allocation")
+    if not result or st.session_state.get("tlf_person_allocation_input") != upload_key:
+        return
+    snapshot = result["snapshot"]
+    st.caption(
+        f"Snapshot: {snapshot['generated_at']} · {snapshot['history_row_count']:,} "
+        f"Person × DID × TLF role-evidence rows."
+    )
+    st.success(
+        f"LLM Team Lead match: {result['team_match']['team_lead_name']} "
+        "(strictly validated against snapshot candidates)."
+    )
+    for allocation in result["allocations"]:
+        tlf = allocation["tlf"]
+        st.markdown(f"### {tlf['name']}")
+        rows = []
+        for role, label in (("generation", "Generation"), ("qc", "QC")):
+            recommendation = allocation[role]
+            primary = recommendation["primary"]
+            rows.append(
+                {
+                    "Role": label,
+                    "Recommendation": "Primary",
+                    "Person": primary["person"] if primary else "Lead review required",
+                    "Score": primary["adjusted_score"] if primary else None,
+                    "Active DIDs": primary["active_did_count"] if primary else None,
+                    "Evidence DID": primary["evidence_did"] if primary else None,
+                }
+            )
+            for index, backup in enumerate(recommendation["backups"], start=1):
+                rows.append(
+                    {
+                        "Role": label,
+                        "Recommendation": f"Backup {index}",
+                        "Person": backup["person"],
+                        "Score": backup["adjusted_score"],
+                        "Active DIDs": backup["active_did_count"],
+                        "Evidence DID": backup["evidence_did"],
+                    }
+                )
+        st.dataframe(rows, use_container_width=True, hide_index=True)
+        if allocation["lead_review_required"]:
+            st.warning(allocation["fallback_reason"])
+        if len(allocation["generation"]["backups"]) < 2 or len(allocation["qc"]["backups"]) < 2:
+            st.caption("Fewer than two evidence-qualified backups are available; lead review is needed.")
+    cache = result["cache"]
+    st.caption(
+        f"Shared TLF similarity cache: {cache['hits']:,} hits · "
+        f"{cache['misses']:,} misses/new single-TLF comparisons."
+    )
+
+
 ensure_state()
 
 with st.sidebar:
@@ -461,7 +577,9 @@ with st.sidebar:
     )
     st.caption("Normal Q&A usually uses 3 LLM calls (Cypher + answer + presentation).")
 
-chat_tab, team_tab = st.tabs(["Ask Neo4j", "Recommend DU Team"])
+chat_tab, team_tab, allocation_tab = st.tabs(
+    ["Ask Neo4j", "Recommend DU Team", "Allocate TLF People"]
+)
 
 with chat_tab:
     in_conversation = bool(st.session_state.messages)
@@ -504,3 +622,6 @@ with chat_tab:
 
 with team_tab:
     render_team_recommendation()
+
+with allocation_tab:
+    render_tlf_person_allocation()
