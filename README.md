@@ -106,34 +106,20 @@ Streamlit chat automatically routes explicit prediction questions to the model:
 Predict Riven's effort for C5001001_59.
 ```
 
-Every request first uses Vox to return one constrained intent. In addition to
-`effort_prediction` and the legacy `monthly_hours_chart` /
-`did_effort_distribution_chart` routes, the app supports 26 fixed result
-templates for person, DID, delivery, Study, team, TLF search, experience, and
-portfolio questions. The catalog and examples are documented in
-[`docs/fixed_result_templates.md`](docs/fixed_result_templates.md).
-
-For a fixed result, Vox makes a second constrained call to extract only the
-template's required parameters. Python validates dates, status values, DID and
-Study uniqueness where applicable, resolves people to the official Neo4j name,
-and runs only the registered read-only Cypher. The App then renders a stable
-combination of KPI cards, chart and/or table. This supports natural requests
-such as "Riven 最近忙不忙？", "C1071007_141 主要是谁做的？", and "显示 Wang,
-Fang 团队未来三个月的任务量" without letting the LLM generate chart queries.
-Ambiguous, compound, low-confidence, or unsupported questions fall back to the
-existing read-only `neo4j_query` Text-to-Cypher flow.
-
-Prediction requests continue with their separate LLM-first parameter extraction,
-Neo4j validation, and V3 model calculation. Python computes P50/P80/P90; the
-LLM does not calculate or alter prediction values.
+Every request first uses Vox to return one constrained intent:
+`effort_prediction`, `monthly_hours_chart`, `did_effort_distribution_chart`,
+or `neo4j_query`. The two chart intents make a second constrained Vox call to
+extract the required person or DID, then use fixed read-only Cypher and a
+Streamlit chart. This supports natural requests such as "Riven 最近忙不忙？"
+and "C1071007_141 主要是谁做的？" without letting the LLM generate chart
+queries. Prediction requests continue with their separate LLM-first parameter
+extraction, Neo4j validation, and V3 model calculation. Python computes
+P50/P80/P90; the LLM does not calculate or alter prediction values. Other
+questions continue through the existing read-only Text-to-Cypher flow.
 
 The DID person-effort chart uses recorded `TIME_ON.Hour` when it exists. For an
 ongoing DID without recorded hours, it instead shows the assigned `WORKS_ON`
 people by task count and labels that fallback clearly.
-
-Fixed results always label `TIME_ON.Hour` as recorded hands-on hours. Assignment
-task counts, TLF/ADaM/SDTM item counts, and planned delivery dates are displayed
-as their own measures and are never presented as recorded hours.
 
 ### RSC model artifact loading
 

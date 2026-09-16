@@ -161,69 +161,25 @@ def history_for_ask() -> list[dict]:
 
 
 def render_visualization(visualization: dict | None) -> None:
-    """Render legacy chart payloads and registry visualization specifications."""
+    """Render the fixed chart payload returned by the Agent."""
     if not visualization or not visualization.get("data"):
         return
     st.caption(visualization.get("title", ""))
-    chart_type = visualization.get("chart_type") or visualization.get("type")
-    if chart_type == "monthly_hours_chart":
+    if visualization["chart_type"] == "monthly_hours_chart":
         st.bar_chart(visualization["data"], x="month", y="hours")
-    elif chart_type == "did_effort_distribution_chart":
+    elif visualization["chart_type"] == "did_effort_distribution_chart":
         st.bar_chart(
             visualization["data"],
             x="person",
             y=visualization.get("value_field", "hours"),
             horizontal=True,
         )
-    elif chart_type in {"bar", "line"}:
-        x = visualization.get("x")
-        y = visualization.get("y")
-        if not x or not y:
-            return
-        try:
-            if chart_type == "line":
-                st.line_chart(visualization["data"], x=x, y=y)
-            else:
-                st.bar_chart(
-                    visualization["data"],
-                    x=x,
-                    y=y,
-                    horizontal=visualization.get("horizontal", False),
-                )
-        except (KeyError, TypeError):
-            st.info("The returned chart fields could not be rendered; see the table below.")
-
-
-def render_fixed_result(result: dict | None) -> None:
-    """Render the generic registry payload deterministically."""
-    if not result or result.get("response_type") != "fixed_result":
-        return
-    if result.get("title"):
-        st.subheader(result["title"])
-    for summary in result.get("summary", []):
-        st.caption(summary)
-    metrics = result.get("metrics", [])
-    if metrics:
-        columns = st.columns(len(metrics))
-        for column, metric in zip(columns, metrics):
-            value = metric.get("value", 0)
-            unit = metric.get("unit", "")
-            column.metric(metric.get("label", "Metric"), f"{value} {unit}".strip())
-    for visualization in result.get("visualizations", []):
-        render_visualization(visualization)
-    table = result.get("table") or {}
-    if table.get("rows"):
-        st.dataframe(table["rows"], use_container_width=True, hide_index=True)
-    if result.get("data_note"):
-        st.caption(result["data_note"])
 
 
 def render_message(msg: dict) -> None:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
-        if msg.get("fixed_result") and msg["role"] == "assistant":
-            render_fixed_result(msg["fixed_result"])
-        elif msg.get("visualization") and msg["role"] == "assistant":
+        if msg.get("visualization") and msg["role"] == "assistant":
             render_visualization(msg["visualization"])
         if msg.get("cypher") and st.session_state.show_cypher and msg["role"] == "assistant":
             st.markdown(f'<div class="cypher-box">{msg["cypher"]}</div>', unsafe_allow_html=True)
@@ -260,10 +216,7 @@ def complete_pending_turn() -> None:
                 usage = result.get("usage") or empty_usage()
                 st.session_state.token_usage = add_usage(st.session_state.token_usage, usage)
                 st.markdown(answer)
-                if result.get("response_type") == "fixed_result":
-                    render_fixed_result(result)
-                else:
-                    render_visualization(result.get("visualization"))
+                render_visualization(result.get("visualization"))
                 if cypher and st.session_state.show_cypher:
                     st.markdown(f'<div class="cypher-box">{cypher}</div>', unsafe_allow_html=True)
                 st.caption(
@@ -278,9 +231,6 @@ def complete_pending_turn() -> None:
                         "usage": usage,
                         "prediction": result.get("prediction"),
                         "visualization": result.get("visualization"),
-                        "fixed_result": (
-                            result if result.get("response_type") == "fixed_result" else None
-                        ),
                     }
                 )
             except Exception as exc:  # noqa: BLE001
