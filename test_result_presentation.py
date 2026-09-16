@@ -25,6 +25,7 @@ class ResultPresentationTests(unittest.TestCase):
                         "y_fields": ["hours"],
                         "series_field": None,
                         "table_fields": ["month", "hours"],
+                        "summary_required": False,
                     }
                 ),
                 {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
@@ -69,7 +70,8 @@ class ResultPresentationTests(unittest.TestCase):
             "Show assignments",
             rows,
             lambda *_: (
-                '{"display_type":"kpi_table","table_fields":["person","task_count"]}',
+                '{"display_type":"kpi_table","table_fields":["person","task_count"],'
+                '"summary_required":false}',
                 {},
             ),
         )
@@ -77,6 +79,44 @@ class ResultPresentationTests(unittest.TestCase):
         self.assertEqual(result["data_note"], "Assigned task count.")
         self.assertIn("table", result)
         self.assertIsNone(warning)
+
+    def test_table_formats_nested_values_as_readable_scalar_cells(self) -> None:
+        result = validate_presentation_selection(
+            {
+                "display_type": "table",
+                "table_fields": ["person", "assignment_examples"],
+                "summary_required": False,
+            },
+            [
+                {
+                    "person": "Riven",
+                    "assignment_examples": [
+                        {"domain": "AE", "role": "QC"},
+                        {"domain": "DM", "role": "QC"},
+                    ],
+                }
+            ],
+        )
+
+        self.assertEqual(
+            result["table"]["rows"][0]["assignment_examples"],
+            "domain: AE; role: QC | domain: DM; role: QC",
+        )
+
+    def test_chart_rejects_nested_category_values(self) -> None:
+        self.assertIsNone(
+            validate_presentation_selection(
+                {
+                    "display_type": "bar",
+                    "x_field": "assignment",
+                    "y_fields": ["task_count"],
+                    "series_field": None,
+                    "table_fields": ["assignment", "task_count"],
+                    "summary_required": False,
+                },
+                [{"assignment": {"domain": "AE"}, "task_count": 1}],
+            )
+        )
 
     def test_line_chart_requires_a_month_or_date_x_field(self) -> None:
         self.assertIsNone(
@@ -87,6 +127,7 @@ class ResultPresentationTests(unittest.TestCase):
                     "y_fields": ["hours"],
                     "series_field": None,
                     "table_fields": ["person", "hours"],
+                    "summary_required": False,
                 },
                 [{"person": "A", "hours": 2.0}],
             )
@@ -94,14 +135,39 @@ class ResultPresentationTests(unittest.TestCase):
 
     @patch("agent.run_cypher", return_value=[{"month": "2026-09", "hours": 5.0}])
     @patch("agent._chat")
-    def test_structured_presentation_suppresses_duplicate_row_answer(
+    def test_visual_only_presentation_skips_text_answer(
         self, mock_chat, _mock_run_cypher
     ) -> None:
         mock_chat.side_effect = [
             ("```cypher\nMATCH (n) RETURN '2026-09' AS month, 5.0 AS hours\n```", {}),
             (
                 '{"display_type":"line","x_field":"month","y_fields":["hours"],'
-                '"series_field":null,"table_fields":["month","hours"]}',
+                '"series_field":null,"table_fields":["month","hours"],'
+                '"summary_required":false}',
+                {},
+            ),
+        ]
+        with patch(
+            "agent.classify_effort_prediction_intent",
+            return_value=(False, {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}),
+        ):
+            result = agent.ask("Show monthly hours", schema={"labels": []})
+
+        self.assertEqual(mock_chat.call_count, 2)
+        self.assertEqual(result["answer"], "")
+        self.assertIsNotNone(result["visualization"])
+
+    @patch("agent.run_cypher", return_value=[{"month": "2026-09", "hours": 5.0}])
+    @patch("agent._chat")
+    def test_requested_summary_is_concise_without_duplicate_rows(
+        self, mock_chat, _mock_run_cypher
+    ) -> None:
+        mock_chat.side_effect = [
+            ("```cypher\nMATCH (n) RETURN '2026-09' AS month, 5.0 AS hours\n```", {}),
+            (
+                '{"display_type":"line","x_field":"month","y_fields":["hours"],'
+                '"series_field":null,"table_fields":["month","hours"],'
+                '"summary_required":true}',
                 {},
             ),
             ("September recorded hours were 5.0.", {"total_tokens": 4}),
@@ -110,12 +176,11 @@ class ResultPresentationTests(unittest.TestCase):
             "agent.classify_effort_prediction_intent",
             return_value=(False, {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}),
         ):
-            result = agent.ask("Show monthly hours", schema={"labels": []})
+            result = agent.ask("Compare monthly hours", schema={"labels": []})
 
         answer_prompt = mock_chat.call_args_list[2].args[0]
         self.assertIn("do not output a markdown table", answer_prompt)
         self.assertEqual(result["answer"], "September recorded hours were 5.0.")
-        self.assertIsNotNone(result["visualization"])
 
     @patch("agent.run_cypher", return_value=[{"study": "C100", "delivery_count": 2}])
     @patch("agent._chat")

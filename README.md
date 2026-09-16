@@ -111,10 +111,12 @@ Explicit effort-prediction requests use a constrained intent and parameter
 extraction flow. Every other graph-data question uses the existing generic,
 read-only Text-to-Cypher flow: Vox generates Cypher, Neo4j returns rows, and a
 separate constrained Vox call may select a table or safe chart from those exact
-returned fields. Python rejects unknown fields, transformed values, and charts
-with missing, non-numeric, or non-finite numeric data. A chart always includes
-a table fallback; a selection failure simply omits presentation and never fails
-an otherwise successful Q&A response. See
+returned fields. A validated presentation is visual-only by default, avoiding a
+duplicate Markdown row list and a third answer call; Vox may explicitly request
+a concise summary only when needed. Python rejects unknown fields, transformed
+values, and charts with missing, non-numeric, or non-finite numeric data. A
+chart always includes a table fallback; a selection failure simply omits
+presentation and never fails an otherwise successful Q&A response. See
 [`docs/post_query_presentation.md`](docs/post_query_presentation.md).
 
 Prediction requests continue with their separate LLM-first parameter extraction,

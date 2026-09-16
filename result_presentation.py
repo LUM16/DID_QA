@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
+from datetime import date, datetime
 import json
 import math
 import re
@@ -53,16 +55,18 @@ or transform values. Prefer table when the fields are not suitable for a chart.
 
 Allowed responses:
 - table or kpi_table:
-  {"display_type":"table","table_fields":["exact_field_name"]}
+  {"display_type":"table","table_fields":["exact_field_name"],"summary_required":false}
 - bar, horizontal_bar, line, stacked_bar, or grouped_bar:
   {"display_type":"bar","x_field":"exact_field_name",
    "y_fields":["exact_numeric_field_name"],"series_field":null,
-   "table_fields":["exact_field_name"]}
+   "table_fields":["exact_field_name"],"summary_required":false}
 
 For a chart, x_field and each y_fields item must be a distinct supplied field.
 series_field must be null or a distinct supplied field. table_fields must be a
 non-empty list of supplied fields. Use a chart only when returned values already
-support it; do not derive a metric."""
+support it; do not derive a metric. Set summary_required to true only when a
+short textual conclusion is necessary to answer a comparison or direct question.
+Otherwise set it to false so the chart or table is the only result content."""
     user = f"""User question:
 {question}
 
@@ -86,6 +90,10 @@ def _is_finite_number(value: Any) -> bool:
     return isinstance(value, Number) and not isinstance(value, bool) and math.isfinite(float(value))
 
 
+def _is_chart_category(value: Any) -> bool:
+    return isinstance(value, (str, Number, date, datetime)) and not isinstance(value, bool)
+
+
 def _chart_fields_are_usable(
     rows: list[dict[str, Any]],
     x_field: str,
@@ -95,9 +103,9 @@ def _chart_fields_are_usable(
     if not rows:
         return False
     for row in rows:
-        if row.get(x_field) is None:
+        if not _is_chart_category(row.get(x_field)):
             return False
-        if series_field is not None and row.get(series_field) is None:
+        if series_field is not None and not _is_chart_category(row.get(series_field)):
             return False
         if any(not _is_finite_number(row.get(field)) for field in y_fields):
             return False
@@ -111,10 +119,29 @@ def _is_temporal_field(rows: list[dict[str, Any]], field: str) -> bool:
     )
 
 
+def _format_table_value(value: Any, depth: int = 0) -> Any:
+    """Convert nested Neo4j values into scalar cells for Streamlit dataframes."""
+    if value is None or isinstance(value, (str, Number, bool, date, datetime)):
+        return value
+    if depth >= 3:
+        return str(value)
+    if isinstance(value, Mapping):
+        return "; ".join(
+            f"{key}: {_format_table_value(item, depth + 1)}"
+            for key, item in value.items()
+        )
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return " | ".join(str(_format_table_value(item, depth + 1)) for item in value)
+    return str(value)
+
+
 def _table_payload(rows: list[dict[str, Any]], fields: list[str]) -> dict[str, Any]:
     return {
         "columns": fields,
-        "rows": [{field: row.get(field) for field in fields} for row in rows],
+        "rows": [
+            {field: _format_table_value(row.get(field)) for field in fields}
+            for row in rows
+        ],
     }
 
 
@@ -139,15 +166,17 @@ def validate_presentation_selection(
         return None
 
     if display_type in {"table", "kpi_table"}:
-        if set(selection) != {"display_type", "table_fields"}:
+        if set(selection) != {"display_type", "table_fields", "summary_required"}:
             return None
         table_fields = _valid_field_list(selection.get("table_fields"), field_set)
-        if table_fields is None:
+        summary_required = selection.get("summary_required")
+        if table_fields is None or not isinstance(summary_required, bool):
             return None
         return {
             "display_type": display_type,
             "table": _table_payload(rows, table_fields),
             "data_note": _data_note(table_fields),
+            "summary_required": summary_required,
         }
 
     if set(selection) != {
@@ -156,17 +185,20 @@ def validate_presentation_selection(
         "y_fields",
         "series_field",
         "table_fields",
+        "summary_required",
     }:
         return None
     x_field = selection.get("x_field")
     y_fields = _valid_field_list(selection.get("y_fields"), field_set)
     series_field = selection.get("series_field")
     table_fields = _valid_field_list(selection.get("table_fields"), field_set)
+    summary_required = selection.get("summary_required")
     if (
         not isinstance(x_field, str)
         or x_field not in field_set
         or y_fields is None
         or table_fields is None
+        or not isinstance(summary_required, bool)
         or (series_field is not None and (not isinstance(series_field, str) or series_field not in field_set))
         or x_field in y_fields
         or (series_field is not None and (series_field == x_field or series_field in y_fields))
@@ -189,6 +221,7 @@ def validate_presentation_selection(
         ),
         "table": _table_payload(rows, table_fields),
         "data_note": _data_note(y_fields),
+        "summary_required": summary_required,
     }
 
 

@@ -19,9 +19,13 @@ be present, and every chart y value must be a finite numeric value. Empty or
 invalid data therefore cannot produce a chart. A chart payload always carries a
 table fallback; `table` and `kpi_table` carry a table payload directly.
 
-Presentation is deliberately optional. Invalid JSON, an unsupported selection,
-or a presentation-call failure produces no visualization but never changes a
-successful Cypher result or its natural-language answer.
+Presentation is deliberately optional. By default, a valid chart or table is
+visual-only and the app skips the natural-language answer call. The selector may
+set `summary_required: true` only when a short conclusion is necessary; that
+summary is limited to two sentences and cannot repeat row details. Invalid JSON,
+an unsupported selection, or a presentation-call failure produces no
+visualization but never changes a successful Cypher result or its
+natural-language answer.
 
 Labels are deterministic: `hours`, `recorded_hours`, and `time_on_hours` are
 labelled **Recorded TIME_ON hours**; `task_count` is labelled **Assigned task

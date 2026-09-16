@@ -729,13 +729,16 @@ def ask(
                 chat=lambda system, user: _chat(system, user, temperature=0),
             )
             usage = add_usage(usage, presentation_usage)
-            answer, u2 = answer_from_rows(
-                question,
-                cypher,
-                rows,
-                structured_presentation=visualization is not None,
-            )
-            usage = add_usage(usage, u2)
+            if visualization is not None and not visualization["summary_required"]:
+                answer = ""
+            else:
+                answer, u2 = answer_from_rows(
+                    question,
+                    cypher,
+                    rows,
+                    structured_presentation=visualization is not None,
+                )
+                usage = add_usage(usage, u2)
             return {
                 "answer": answer,
                 "cypher": cypher,
