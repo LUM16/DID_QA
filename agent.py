@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Any
 
 from effort_prediction import person_name_candidates, predict_effort, resolve_person_name
+from fixed_results import REGISTRY as FIXED_RESULT_REGISTRY
+from fixed_results import run_fixed_result
 from neo4j_client import get_schema, load_env, run_cypher
 from vox_client import add_usage, chat as _chat, empty_usage
 
@@ -196,11 +198,21 @@ def classify_request_intent(
         f"{message['role']}: {message['content']}" for message in (history or [])[-6:]
     )
     context = _latest_prediction_context(history)
-    system = """Classify the user's DID application request.
-Return exactly one JSON object with an intent selected from:
+    fixed_intents = "\n".join(f'- "{intent}"' for intent in FIXED_RESULT_REGISTRY)
+    system = f"""Classify the user's DID application request.
+Return exactly one JSON object:
+{{"intent": one allowed intent, "confidence": "high"|"low"}}.
+
+Choose "low" when the request is ambiguous, compound, missing a clear supported
+result shape, or would require guessing. Low-confidence requests always use
+"neo4j_query". Select the intent from:
 - "effort_prediction": estimate future total hands-on hours for a person and DID.
 - "monthly_hours_chart": show a person's historical recorded TIME_ON hours over time.
 - "did_effort_distribution_chart": show recorded TIME_ON hours split among people for one DID.
+- "person_monthly_hours" and "did_person_contribution" are the catalog names for
+  the preceding legacy chart intents.
+- one of these fixed result intents:
+{fixed_intents}
 - "neo4j_query": every other graph-data request.
 
 Use monthly_hours_chart for natural workload/history/trend requests even when the
@@ -217,15 +229,19 @@ Recent conversation:
 Current request:
 {question}"""
     raw, usage = _chat(system, user, temperature=0)
-    intent = _extract_json_object(raw).get("intent")
+    payload = _extract_json_object(raw)
+    intent = payload.get("intent")
     valid_intents = {
         "effort_prediction",
         "monthly_hours_chart",
         "did_effort_distribution_chart",
         "neo4j_query",
+        *FIXED_RESULT_REGISTRY,
     }
     if intent not in valid_intents:
         raise ValueError("Intent classifier returned an unsupported intent.")
+    if payload.get("confidence", "high") != "high":
+        return "neo4j_query", usage
     return intent, usage
 
 
@@ -886,6 +902,20 @@ def ask(
                 "error": error,
                 "usage": intent_usage,
             }
+    if intent in FIXED_RESULT_REGISTRY:
+        try:
+            return run_fixed_result(
+                intent=intent,
+                question=question,
+                history=history,
+                schema=schema,
+                initial_usage=intent_usage,
+                chat=lambda system, user: _chat(system, user, temperature=0),
+                run_query=run_cypher,
+                resolve_person=resolve_person_name,
+            )
+        except ValueError:  # Missing/ambiguous fixed inputs fall back to the Q&A flow.
+            intent = "neo4j_query"
 
     schema = schema or get_schema()
     last_error = None

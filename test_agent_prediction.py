@@ -194,6 +194,18 @@ class AgentPredictionTests(unittest.TestCase):
             )
         )
 
+    @patch("agent._chat")
+    def test_low_confidence_request_falls_back_to_neo4j_query(self, mock_chat) -> None:
+        mock_chat.return_value = (
+            '{"intent":"person_monthly_hours","confidence":"low"}',
+            {"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6},
+        )
+
+        intent, usage = agent.classify_request_intent("帮我分析一下团队情况")
+
+        self.assertEqual(intent, "neo4j_query")
+        self.assertEqual(usage["total_tokens"], 6)
+
     @patch("agent.predict_effort", return_value=PREDICTION)
     @patch("agent.person_name_candidates", return_value=["Chen, Zhenchao (Riven)"])
     @patch("agent._chat")
