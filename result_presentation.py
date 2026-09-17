@@ -24,6 +24,7 @@ DISPLAY_TYPES = {
     "line",
     "stacked_bar",
     "grouped_bar",
+    "pie",
 }
 CHART_TYPES = DISPLAY_TYPES - {"table", "kpi_table"}
 
@@ -56,6 +57,10 @@ or transform values. Prefer table when the fields are not suitable for a chart.
 Allowed responses:
 - table or kpi_table:
   {"display_type":"table","table_fields":["exact_field_name"],"summary_required":false}
+- pie:
+  {"display_type":"pie","names_field":"exact_field_name",
+   "values_field":"exact_numeric_field_name",
+   "table_fields":["exact_field_name"],"summary_required":false}
 - bar, horizontal_bar, line, stacked_bar, or grouped_bar:
   {"display_type":"bar","x_field":"exact_field_name",
    "y_fields":["exact_numeric_field_name"],"series_field":null,
@@ -63,9 +68,10 @@ Allowed responses:
 
 For a chart, x_field and each y_fields item must be a distinct supplied field.
 series_field must be null or a distinct supplied field. table_fields must be a
-non-empty list of supplied fields. Use a chart only when returned values already
-support it; do not derive a metric. Set summary_required to true only when a
-short textual conclusion is necessary to answer a comparison or direct question.
+non-empty list of supplied fields. Use pie only for a share of a whole across a
+few categories. Use a chart only when returned values already support it; do
+not derive a metric. Set summary_required to true only when a short textual
+conclusion is necessary to answer a comparison or direct question.
 Otherwise set it to false so the chart or table is the only result content."""
     user = f"""User question:
 {question}
@@ -155,6 +161,12 @@ def _data_note(fields: list[str]) -> str | None:
     return " ".join(notes) or None
 
 
+def table_from_rows(rows: list[dict[str, Any]], fields: list[str] | None = None) -> dict[str, Any]:
+    """Always-safe table payload from Neo4j rows."""
+    table_fields = fields or _field_names(rows)
+    return _table_payload(rows, table_fields)
+
+
 def validate_presentation_selection(
     selection: dict[str, Any], rows: list[dict[str, Any]]
 ) -> dict[str, Any] | None:
@@ -176,6 +188,46 @@ def validate_presentation_selection(
             "display_type": display_type,
             "table": _table_payload(rows, table_fields),
             "data_note": _data_note(table_fields),
+            "summary_required": summary_required,
+        }
+
+    if display_type == "pie":
+        if set(selection) != {
+            "display_type",
+            "names_field",
+            "values_field",
+            "table_fields",
+            "summary_required",
+        }:
+            return None
+        names_field = selection.get("names_field")
+        values_field = selection.get("values_field")
+        table_fields = _valid_field_list(selection.get("table_fields"), field_set)
+        summary_required = selection.get("summary_required")
+        if (
+            not isinstance(names_field, str)
+            or names_field not in field_set
+            or not isinstance(values_field, str)
+            or values_field not in field_set
+            or names_field == values_field
+            or table_fields is None
+            or not isinstance(summary_required, bool)
+            or not _chart_fields_are_usable(rows, names_field, [values_field], None)
+        ):
+            return None
+        return {
+            "display_type": "pie",
+            "chart_type": "pie",
+            "data": rows,
+            "x": names_field,
+            "y": [values_field],
+            "names": names_field,
+            "values": values_field,
+            "series": None,
+            "horizontal": False,
+            "stack": None,
+            "table": _table_payload(rows, table_fields),
+            "data_note": _data_note([values_field]),
             "summary_required": summary_required,
         }
 

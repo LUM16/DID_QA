@@ -704,13 +704,7 @@ def _prediction_artifact_cache_dir() -> Path:
 
 def _download_prediction_artifact(url: str, destination: Path) -> Path:
     destination.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{destination.name}.",
-        suffix=".download",
-        dir=destination.parent,
-    )
-    os.close(descriptor)
-    temporary_path = Path(temporary_name)
+    temporary_path = destination.with_suffix(destination.suffix + ".download")
     headers = {"User-Agent": "did-qa-effort-prediction"}
     github_token = os.environ.get("GITHUB_TOKEN")
     if github_token:

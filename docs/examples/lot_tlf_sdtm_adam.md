@@ -41,7 +41,32 @@ Auto-parameterized query to list SDTM/ADaM/TLF differences between two DIDs
 **Cypher**
 
 ```cypher
-WITH "{{delivery_id1:Delivery ID 1}}" AS targetDID1, "{{delivery_id2:Delivery ID 2}}" AS targetDID2 MATCH (did1:Delivery {DID: targetDID1}) OPTIONAL MATCH (did1)-[:HAS_SDTM]->(sdtm1:SDTM) OPTIONAL MATCH (did1)-[:HAS_ADAM]->(adam1:ADAM) OPTIONAL MATCH (did1)-[:HAS_TLF]->(tlf1:TLF) WITH targetDID1, targetDID2, collect(DISTINCT sdtm1.Name) AS sdtmNames1, collect(DISTINCT adam1.Name) AS adamNames1, collect(DISTINCT tlf1.Name) AS tlfNames1 MATCH (did2:Delivery {DID: targetDID2}) OPTIONAL MATCH (did2)-[:HAS_SDTM]->(sdtm2:SDTM) OPTIONAL MATCH (did2)-[:HAS_ADAM]->(adam2:ADAM) OPTIONAL MATCH (did2)-[:HAS_TLF]->(tlf2:TLF) WITH targetDID1, targetDID2, sdtmNames1, collect(DISTINCT sdtm2.Name) AS sdtmNames2, adamNames1, collect(DISTINCT adam2.Name) AS adamNames2, tlfNames1, collect(DISTINCT tlf2.Name) AS tlfNames2 RETURN "SDTM" AS Deliverable_Type, [n IN sdtmNames1 WHERE NOT n IN sdtmNames2] AS SDTM_Unique_To_First_DID, [n IN sdtmNames2 WHERE NOT n IN sdtmNames1] AS SDTM_Unique_To_Second_DID, "ADaM" AS Deliverable_Type_2, [n IN adamNames1 WHERE NOT n IN adamNames2] AS ADaM_Unique_To_First_DID, [n IN adamNames2 WHERE NOT n IN adamNames1] AS ADaM_Unique_To_Second_DID, "TLF" AS Deliverable_Type_3, [n IN tlfNames1 WHERE NOT n IN tlfNames2] AS TLF_Unique_To_First_DID, [n IN tlfNames2 WHERE NOT n IN tlfNames1] AS TLF_Unique_To_Second_DID;
+WITH '{{delivery_id1:Delivery ID 1}}' AS targetDID1, '{{delivery_id2:Delivery ID 2}}' AS targetDID2
+MATCH (did1:Delivery {DID: targetDID1})
+OPTIONAL MATCH (did1)-[:HAS_SDTM]->(sdtm1:SDTM)
+OPTIONAL MATCH (did1)-[:HAS_ADAM]->(adam1:ADaM)
+OPTIONAL MATCH (did1)-[:HAS_TLF]->(tlf1:TLF)
+WITH targetDID1, targetDID2,
+     collect(DISTINCT sdtm1.Name) AS sdtmNames1,
+     collect(DISTINCT adam1.Name) AS adamNames1,
+     collect(DISTINCT tlf1.Name) AS tlfNames1
+MATCH (did2:Delivery {DID: targetDID2})
+OPTIONAL MATCH (did2)-[:HAS_SDTM]->(sdtm2:SDTM)
+OPTIONAL MATCH (did2)-[:HAS_ADAM]->(adam2:ADaM)
+OPTIONAL MATCH (did2)-[:HAS_TLF]->(tlf2:TLF)
+WITH targetDID1, targetDID2, sdtmNames1, adamNames1, tlfNames1,
+     collect(DISTINCT sdtm2.Name) AS sdtmNames2,
+     collect(DISTINCT adam2.Name) AS adamNames2,
+     collect(DISTINCT tlf2.Name) AS tlfNames2
+RETURN 'SDTM' AS Deliverable_Type,
+       [n IN sdtmNames1 WHERE NOT n IN sdtmNames2] AS SDTM_Unique_To_First_DID,
+       [n IN sdtmNames2 WHERE NOT n IN sdtmNames1] AS SDTM_Unique_To_Second_DID,
+       'ADaM' AS Deliverable_Type_2,
+       [n IN adamNames1 WHERE NOT n IN adamNames2] AS ADaM_Unique_To_First_DID,
+       [n IN adamNames2 WHERE NOT n IN adamNames1] AS ADaM_Unique_To_Second_DID,
+       'TLF' AS Deliverable_Type_3,
+       [n IN tlfNames1 WHERE NOT n IN tlfNames2] AS TLF_Unique_To_First_DID,
+       [n IN tlfNames2 WHERE NOT n IN tlfNames1] AS TLF_Unique_To_Second_DID
 ```
 
 ## q094: Please help me retrieve tables similar to a specific table title.
@@ -186,40 +211,40 @@ Auto-parameterized query for question
 **Cypher**
 
 ```cypher
-MATCH (d1:Delivery {DID: {{did1:First DID}}})
-MATCH (d2:Delivery {DID: {{did2:Second DID}}})
+MATCH (d1:Delivery {DID: '{{did1:First DID}}'})
+MATCH (d2:Delivery {DID: '{{did2:Second DID}}'})
 OPTIONAL MATCH (d1)-[:HAS_TLF]->(tlf1:TLF)
 OPTIONAL MATCH (d2)-[:HAS_TLF]->(tlf2:TLF)
-WITH d1, d2, 
-     COLLECT(DISTINCT tlf1.Name) as DID1_TLFs, 
-     COLLECT(DISTINCT tlf2.Name) as DID2_TLFs
+WITH d1, d2,
+     COLLECT(DISTINCT tlf1.Name) AS DID1_TLFs,
+     COLLECT(DISTINCT tlf2.Name) AS DID2_TLFs
 WITH d1, d2, DID1_TLFs, DID2_TLFs,
-     [tlf IN DID1_TLFs WHERE NOT tlf IN DID2_TLFs] as TLF_Only_in_DID1,
-     [tlf IN DID2_TLFs WHERE NOT tlf IN DID1_TLFs] as TLF_Only_in_DID2
-OPTIONAL MATCH (d1)-[:HAS_ADAM]->(adam1:ADAM)
-OPTIONAL MATCH (d2)-[:HAS_ADAM]->(adam2:ADAM)
+     [tlf IN DID1_TLFs WHERE NOT tlf IN DID2_TLFs] AS TLF_Only_in_DID1,
+     [tlf IN DID2_TLFs WHERE NOT tlf IN DID1_TLFs] AS TLF_Only_in_DID2
+OPTIONAL MATCH (d1)-[:HAS_ADAM]->(adam1:ADaM)
+OPTIONAL MATCH (d2)-[:HAS_ADAM]->(adam2:ADaM)
 WITH d1, d2, DID1_TLFs, DID2_TLFs, TLF_Only_in_DID1, TLF_Only_in_DID2,
-     COLLECT(DISTINCT adam1.Name) as DID1_ADAMs,
-     COLLECT(DISTINCT adam2.Name) as DID2_ADAMs
+     COLLECT(DISTINCT adam1.Name) AS DID1_ADaMs,
+     COLLECT(DISTINCT adam2.Name) AS DID2_ADaMs
 WITH d1, d2, DID1_TLFs, DID2_TLFs, TLF_Only_in_DID1, TLF_Only_in_DID2,
-     DID1_ADAMs, DID2_ADAMs,
-     [adam IN DID1_ADAMs WHERE NOT adam IN DID2_ADAMs] as ADAM_Only_in_DID1,
-     [adam IN DID2_ADAMs WHERE NOT adam IN DID1_ADAMs] as ADAM_Only_in_DID2
+     DID1_ADaMs, DID2_ADaMs,
+     [adam IN DID1_ADaMs WHERE NOT adam IN DID2_ADaMs] AS ADaM_Only_in_DID1,
+     [adam IN DID2_ADaMs WHERE NOT adam IN DID1_ADaMs] AS ADaM_Only_in_DID2
 OPTIONAL MATCH (d1)-[:HAS_SDTM]->(sdtm1:SDTM)
 OPTIONAL MATCH (d2)-[:HAS_SDTM]->(sdtm2:SDTM)
-WITH d1.DID as DID1, d2.DID as DID2,
+WITH d1.DID AS DID1, d2.DID AS DID2,
      DID1_TLFs, DID2_TLFs, TLF_Only_in_DID1, TLF_Only_in_DID2,
-     DID1_ADAMs, DID2_ADAMs, ADAM_Only_in_DID1, ADAM_Only_in_DID2,
-     COLLECT(DISTINCT sdtm1.Name) as DID1_SDTMs,
-     COLLECT(DISTINCT sdtm2.Name) as DID2_SDTMs
+     DID1_ADaMs, DID2_ADaMs, ADaM_Only_in_DID1, ADaM_Only_in_DID2,
+     COLLECT(DISTINCT sdtm1.Name) AS DID1_SDTMs,
+     COLLECT(DISTINCT sdtm2.Name) AS DID2_SDTMs
 RETURN DID1, DID2,
-       SIZE(DID1_TLFs) as DID1_TLF_Count, SIZE(DID2_TLFs) as DID2_TLF_Count,
+       SIZE(DID1_TLFs) AS DID1_TLF_Count, SIZE(DID2_TLFs) AS DID2_TLF_Count,
        TLF_Only_in_DID1, TLF_Only_in_DID2,
-       SIZE(DID1_ADAMs) as DID1_ADAM_Count, SIZE(DID2_ADAMs) as DID2_ADAM_Count,
-       ADAM_Only_in_DID1, ADAM_Only_in_DID2,
-       SIZE(DID1_SDTMs) as DID1_SDTM_Count, SIZE(DID2_SDTMs) as DID2_SDTM_Count,
-       [sdtm IN DID1_SDTMs WHERE NOT sdtm IN DID2_SDTMs] as SDTM_Only_in_DID1,
-       [sdtm IN DID2_SDTMs WHERE NOT sdtm IN DID1_SDTMs] as SDTM_Only_in_DID2
+       SIZE(DID1_ADaMs) AS DID1_ADaM_Count, SIZE(DID2_ADaMs) AS DID2_ADaM_Count,
+       ADaM_Only_in_DID1, ADaM_Only_in_DID2,
+       SIZE(DID1_SDTMs) AS DID1_SDTM_Count, SIZE(DID2_SDTMs) AS DID2_SDTM_Count,
+       [sdtm IN DID1_SDTMs WHERE NOT sdtm IN DID2_SDTMs] AS SDTM_Only_in_DID1,
+       [sdtm IN DID2_SDTMs WHERE NOT sdtm IN DID1_SDTMs] AS SDTM_Only_in_DID2
 ```
 
 ## q103: Which deliveries have a similar or duplicate table title?
@@ -283,8 +308,12 @@ Auto-parameterized query for question.
 **Cypher**
 
 ```cypher
-MATCH (n:Delivery {Name: {deliveryName}})
-RETURN n.TLF_Num AS TLF_Number
+WITH '{{delivery_id:Delivery ID}}' AS specificDID
+MATCH (delivery:Delivery {Name: specificDID})-[hasTLF:HAS_TLF]->(tlf:TLF)
+RETURN delivery.Name AS Delivery_ID,
+       tlf.Name AS TLF_Name,
+       hasTLF.TLF_Number AS TLF_Number
+ORDER BY TLF_Name
 ```
 
 ## q111: Find delivery identifiers for TLFs containing a specific name.
@@ -325,11 +354,10 @@ Auto-parameterized query for question.
 **Cypher**
 
 ```cypher
-MATCH (s:Study {Name: {studyName}})-[:HAS_DELIVERY]->(d:Delivery)
-MATCH (d)-[r:HAS_TLF|:HAS_ADAM|:HAS_SDTM]->(n)
-MATCH (p:Person)-[:WORKS_ON]->(d)
-WHERE (r.Generation CONTAINS p.Name OR r.QC CONTAINS p.Name)
-RETURN DISTINCT p.Name AS Person_Name
+MATCH (study:Study {Name: '{{study:Study name}}'})-[:HAS_DELIVERY]->(delivery:Delivery)
+MATCH (person:Person)-[:WORKS_ON]->(delivery)
+RETURN DISTINCT study.Name AS Study_Name, person.Name AS Person_Name
+ORDER BY Person_Name
 ```
 
 ## q128: list team members under Wang Fang, summarizing task numbers by study generation numbers and QC numbers for period 2025-03-01 to 2025-09-01
@@ -350,9 +378,11 @@ Auto-parameterized query for question.
 **Cypher**
 
 ```cypher
-MATCH (teamMember:Person {Team_Lead_Name: {teamLeadName}})-[r:WORKS_ON]->(d:Delivery)<-[:HAS_DELIVERY]-(study:Study)
-WHERE d.Actual_Delivery_Date >= date({startDate}) AND d.Actual_Delivery_Date <= date({endDate})
-WITH teamMember, study, SUM(r.Task_Num_Generation) AS Total_Task_Num_GEN, SUM(r.Task_Num_QC) AS Total_Task_Num_QC
+MATCH (teamMember:Person {Team_Lead_Name: '{{team_lead:Team lead name}}'})-[r:WORKS_ON]->(d:Delivery)<-[:HAS_DELIVERY]-(study:Study)
+WHERE d.Actual_Delivery_Date >= date('{{startDate:Start date}}') AND d.Actual_Delivery_Date <= date('{{endDate:End date}}')
+WITH teamMember, study,
+     SUM(coalesce(toFloat(r.CSR_Task_Num_Generation), 0.0) + coalesce(toFloat(r.SDA_Task_Num_Generation), 0.0) + coalesce(toFloat(r.STD_Task_Num_Generation), 0.0) + coalesce(toFloat(r.esub_Data_Num_Generation), 0.0)) AS Total_Task_Num_GEN,
+     SUM(coalesce(toFloat(r.CSR_Task_Num_QC), 0.0) + coalesce(toFloat(r.SDA_Task_Num_QC), 0.0) + coalesce(toFloat(r.STD_Task_Num_QC), 0.0) + coalesce(toFloat(r.esub_Data_Num_QC), 0.0)) AS Total_Task_Num_QC
 RETURN teamMember.Name AS Team_Member_Name, study.Name AS Study_Name, Total_Task_Num_GEN, Total_Task_Num_QC
 ORDER BY Team_Member_Name, Study_Name
 ```
@@ -463,23 +493,22 @@ Auto-parameterized query for question.
 
 ```cypher
 MATCH (s:Study {Name: '{{study:Study Name}}'})-[:HAS_DELIVERY]->(d:Delivery)-[r:HAS_TLF]->(tlf:TLF)
-    WITH tlf.Name AS TLF_Name, d.Name AS Delivery_Name, r.Generation AS Generation, r.QC AS QC
-    // Extract numeric suffix from Delivery_Name using regular expression to remove the prefix
-    WITH TLF_Name, Delivery_Name, Generation, QC, 
-         toInteger(apoc.text.replace(Delivery_Name, '^.*_(\d+)$', '$1')) AS numericSuffix
-    ORDER BY TLF_Name, numericSuffix ASC
-    WITH TLF_Name, collect({delivery: Delivery_Name, generation: Generation, qc: QC}) AS deliveries
-    UNWIND range(1, size(deliveries) - 1) AS i
-    WITH TLF_Name, deliveries[i - 1] AS prevDelivery, deliveries[i] AS currentDelivery
-    WHERE prevDelivery.generation <> currentDelivery.generation 
-       OR prevDelivery.qc <> currentDelivery.qc
-    RETURN TLF_Name AS TLF, 
-           currentDelivery.delivery AS Delivery_Name, 
-           prevDelivery.generation AS Previous_Generation, 
-           currentDelivery.generation AS Current_Generation, 
-           prevDelivery.qc AS Previous_QC, 
-           currentDelivery.qc AS Current_QC
-    ORDER BY TLF_Name, currentDelivery.delivery
+WITH tlf.Name AS TLF_Name, d.Name AS Delivery_Name, r.Generation AS Generation, r.QC AS QC
+WITH TLF_Name, Delivery_Name, Generation, QC,
+     toInteger(last(split(Delivery_Name, '_'))) AS numericSuffix
+ORDER BY TLF_Name, numericSuffix ASC
+WITH TLF_Name, collect({delivery: Delivery_Name, generation: Generation, qc: QC}) AS deliveries
+UNWIND range(1, size(deliveries) - 1) AS i
+WITH TLF_Name, deliveries[i - 1] AS prevDelivery, deliveries[i] AS currentDelivery
+WHERE prevDelivery.generation <> currentDelivery.generation
+   OR prevDelivery.qc <> currentDelivery.qc
+RETURN TLF_Name AS TLF,
+       currentDelivery.delivery AS Delivery_Name,
+       prevDelivery.generation AS Previous_Generation,
+       currentDelivery.generation AS Current_Generation,
+       prevDelivery.qc AS Previous_QC,
+       currentDelivery.qc AS Current_QC
+ORDER BY TLF_Name, currentDelivery.delivery
 ```
 
 ## q140_2: Compare SDTM generation and QC across deliveries for Study C2321001
@@ -499,29 +528,28 @@ Auto-parameterized query for question.
 
 ```cypher
 MATCH (s:Study {Name: '{{study:Study Name}}'})-[:HAS_DELIVERY]->(d:Delivery)-[r:HAS_SDTM]->(sdtm:SDTM)
-    WITH sdtm.Name AS SDTM_Name, d.Name AS Delivery_Name, r.Generation AS Generation, r.QC AS QC
-    // Extract numeric suffix from Delivery_Name using regular expression to remove the prefix
-    WITH SDTM_Name, Delivery_Name, Generation, QC, 
-         toInteger(apoc.text.replace(Delivery_Name, '^.*_(\d+)$', '$1')) AS numericSuffix
-    ORDER BY SDTM_Name, numericSuffix ASC
-    WITH SDTM_Name, collect({delivery: Delivery_Name, generation: Generation, qc: QC}) AS deliveries
-    UNWIND range(1, size(deliveries) - 1) AS i
-    WITH SDTM_Name, deliveries[i - 1] AS prevDelivery, deliveries[i] AS currentDelivery
-    WHERE prevDelivery.generation <> currentDelivery.generation 
-       OR prevDelivery.qc <> currentDelivery.qc
-    RETURN SDTM_Name AS SDTM, 
-           currentDelivery.delivery AS Delivery_Name, 
-           prevDelivery.generation AS Previous_Generation, 
-           currentDelivery.generation AS Current_Generation, 
-           prevDelivery.qc AS Previous_QC, 
-           currentDelivery.qc AS Current_QC
-    ORDER BY SDTM_Name, currentDelivery.delivery
+WITH sdtm.Name AS SDTM_Name, d.Name AS Delivery_Name, r.Generation AS Generation, r.QC AS QC
+WITH SDTM_Name, Delivery_Name, Generation, QC,
+     toInteger(last(split(Delivery_Name, '_'))) AS numericSuffix
+ORDER BY SDTM_Name, numericSuffix ASC
+WITH SDTM_Name, collect({delivery: Delivery_Name, generation: Generation, qc: QC}) AS deliveries
+UNWIND range(1, size(deliveries) - 1) AS i
+WITH SDTM_Name, deliveries[i - 1] AS prevDelivery, deliveries[i] AS currentDelivery
+WHERE prevDelivery.generation <> currentDelivery.generation
+   OR prevDelivery.qc <> currentDelivery.qc
+RETURN SDTM_Name AS SDTM,
+       currentDelivery.delivery AS Delivery_Name,
+       prevDelivery.generation AS Previous_Generation,
+       currentDelivery.generation AS Current_Generation,
+       prevDelivery.qc AS Previous_QC,
+       currentDelivery.qc AS Current_QC
+ORDER BY SDTM_Name, currentDelivery.delivery
 ```
 
-## q140_3: Compare ADAM generation and QC across deliveries for Study C2321001
+## q140_3: Compare ADaM generation and QC across deliveries for Study C2321001
 
 **Business intent**  
-Compare ADAM generation and QC across deliveries for Study C2321001
+Compare ADaM generation and QC across deliveries for Study C2321001
 
 **Parameters**
 
@@ -534,22 +562,21 @@ Compare ADAM generation and QC across deliveries for Study C2321001
 **Cypher**
 
 ```cypher
-MATCH (s:Study {Name: '{{study:Study Name}}'})-[:HAS_DELIVERY]->(d:Delivery)-[r:HAS_ADAM]->(adam:ADAM)
-    WITH adam.Name AS ADAM_Name, d.Name AS Delivery_Name, r.Generation AS Generation, r.QC AS QC
-    // Extract numeric suffix from Delivery_Name using regular expression to remove the prefix
-    WITH ADAM_Name, Delivery_Name, Generation, QC, 
-         toInteger(apoc.text.replace(Delivery_Name, '^.*_(\d+)$', '$1')) AS numericSuffix
-    ORDER BY ADAM_Name, numericSuffix ASC
-    WITH ADAM_Name, collect({delivery: Delivery_Name, generation: Generation, qc: QC}) AS deliveries
-    UNWIND range(1, size(deliveries) - 1) AS i
-    WITH ADAM_Name, deliveries[i - 1] AS prevDelivery, deliveries[i] AS currentDelivery
-    WHERE prevDelivery.generation <> currentDelivery.generation 
-       OR prevDelivery.qc <> currentDelivery.qc
-    RETURN ADAM_Name AS ADAM, 
-           currentDelivery.delivery AS Delivery_Name, 
-           prevDelivery.generation AS Previous_Generation, 
-           currentDelivery.generation AS Current_Generation, 
-           prevDelivery.qc AS Previous_QC, 
-           currentDelivery.qc AS Current_QC
-    ORDER BY ADAM_Name, currentDelivery.delivery`
+MATCH (s:Study {Name: '{{study:Study Name}}'})-[:HAS_DELIVERY]->(d:Delivery)-[r:HAS_ADAM]->(adam:ADaM)
+WITH adam.Name AS ADaM_Name, d.Name AS Delivery_Name, r.Generation AS Generation, r.QC AS QC
+WITH ADaM_Name, Delivery_Name, Generation, QC,
+     toInteger(last(split(Delivery_Name, '_'))) AS numericSuffix
+ORDER BY ADaM_Name, numericSuffix ASC
+WITH ADaM_Name, collect({delivery: Delivery_Name, generation: Generation, qc: QC}) AS deliveries
+UNWIND range(1, size(deliveries) - 1) AS i
+WITH ADaM_Name, deliveries[i - 1] AS prevDelivery, deliveries[i] AS currentDelivery
+WHERE prevDelivery.generation <> currentDelivery.generation
+   OR prevDelivery.qc <> currentDelivery.qc
+RETURN ADaM_Name AS ADaM,
+       currentDelivery.delivery AS Delivery_Name,
+       prevDelivery.generation AS Previous_Generation,
+       currentDelivery.generation AS Current_Generation,
+       prevDelivery.qc AS Previous_QC,
+       currentDelivery.qc AS Current_QC
+ORDER BY ADaM_Name, currentDelivery.delivery
 ```

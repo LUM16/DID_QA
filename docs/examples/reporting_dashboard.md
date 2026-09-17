@@ -12,12 +12,12 @@ OPTIONAL MATCH (s)-[:HAS_DETAIL]->(info:Study_Info)
 OPTIONAL MATCH (sdsl:Person)-[:WORKS_AS]->(s)
 WHERE sdsl.Name = s.SDSL
 OPTIONAL MATCH (sdsl)-[:REPORTS_TO*1..]->(groupLead:Person)
-WHERE groupLead.Group_Lead = 'Y'
+WHERE groupLead.Group_Lead IS NOT NULL AND groupLead.Group_Lead <> ''
 OPTIONAL MATCH (sdsl)-[:REPORTS_TO*1..]->(taLead:Person)
-WHERE taLead.TA_Lead = 'Y'
+WHERE taLead.TA_Lead IS NOT NULL AND taLead.TA_Lead <> ''
 RETURN
   s.Name AS Study_Name,
-  SUM(d.TLF_Num) AS TLF_Volume,
+  SUM(coalesce(toFloat(d.CSR_TLF_Num), 0.0)) AS TLF_Volume,
   d.SDSL AS SDSL,
   groupLead.Name AS Group_Lead,
   taLead.Name AS TA_Lead,
@@ -46,12 +46,12 @@ OPTIONAL MATCH (s)-[:HAS_DETAIL]->(info:Study_Info)
 OPTIONAL MATCH (sdsl:Person)-[:WORKS_AS]->(s)
 WHERE sdsl.Name = d.SDSL
 OPTIONAL MATCH (sdsl)-[:REPORTS_TO*1..]->(groupLead:Person)
-WHERE groupLead.Group_Lead = 'Y'
+WHERE groupLead.Group_Lead IS NOT NULL AND groupLead.Group_Lead <> ''
 OPTIONAL MATCH (sdsl)-[:REPORTS_TO*1..]->(taLead:Person)
-WHERE taLead.TA_Lead = 'Y'
+WHERE taLead.TA_Lead IS NOT NULL AND taLead.TA_Lead <> ''
 RETURN
   s.Name AS Study_Name,
-  SUM(d.TLF_Num) AS TLF_Volume,
+  SUM(coalesce(toFloat(d.CSR_TLF_Num), 0.0)) AS TLF_Volume,
   d.SDSL AS SDSL,
   groupLead.Name AS Group_Lead,
   taLead.Name AS TA_Lead,
@@ -81,12 +81,12 @@ OPTIONAL MATCH (s)-[:HAS_DETAIL]->(info:Study_Info)
 OPTIONAL MATCH (sdsl:Person)-[:WORKS_AS]->(s)
 WHERE sdsl.Name = d.SDSL
 OPTIONAL MATCH (sdsl)-[:REPORTS_TO*1..]->(groupLead:Person)
-WHERE groupLead.Group_Lead = 'Y'
+WHERE groupLead.Group_Lead IS NOT NULL AND groupLead.Group_Lead <> ''
 OPTIONAL MATCH (sdsl)-[:REPORTS_TO*1..]->(taLead:Person)
-WHERE taLead.TA_Lead = 'Y'
+WHERE taLead.TA_Lead IS NOT NULL AND taLead.TA_Lead <> ''
 RETURN
   s.Name AS Study_Name,
-  SUM(d.TLF_Num) AS TLF_Volume,
+  SUM(coalesce(toFloat(d.CSR_TLF_Num), 0.0)) AS TLF_Volume,
   d.SDSL AS SDSL,
   groupLead.Name AS Group_Lead,
   taLead.Name AS TA_Lead,
@@ -114,7 +114,7 @@ WITH
   d.Reporting_Detail AS Reporting_Detail,
   d.Planned_Delivery_Date AS Planned_Date,
   d.Actual_Delivery_Date AS Actual_Date,
-  d.Task_Num AS Task,
+  coalesce(toFloat(d.CSR_Task_Num), 0.0) + coalesce(toFloat(d.SDA_Task_Num), 0.0) + coalesce(toFloat(d.STD_Task_Num), 0.0) + coalesce(toFloat(d.esub_Task_Data_Num), 0.0) AS Task,
   toInteger(SUM(dm.Hour)) AS Delivery_HandsOn_Hours
 RETURN
   Study_Name,
@@ -142,7 +142,7 @@ WITH
   d.Reporting_Event AS Reporting_Event,
   d.Reporting_Detail AS Reporting_Detail,
   d.Actual_Delivery_Date AS Actual_Date,
-  SUM(DISTINCT w.Task_Num) AS Task,
+  SUM(coalesce(toFloat(w.CSR_Task_Num_Total), 0.0) + coalesce(toFloat(w.SDA_Task_Num_Total), 0.0) + coalesce(toFloat(w.STD_Task_Num_Total), 0.0) + coalesce(toFloat(w.esub_Data_Num_Total), 0.0)) AS Task,
   SUM(DISTINCT t.Hour) AS Time_Spent
 RETURN
   Study,
@@ -174,7 +174,7 @@ RETURN
   d.Reporting_Event AS Reporting_Event,
   d.Reporting_Detail AS Reporting_Detail,
   d.Planned_Delivery_Date AS Planned_Delivery_Date,
-  w.Task_Num AS Task_Num
+  coalesce(toFloat(w.CSR_Task_Num_Total), 0.0) + coalesce(toFloat(w.SDA_Task_Num_Total), 0.0) + coalesce(toFloat(w.STD_Task_Num_Total), 0.0) + coalesce(toFloat(w.esub_Data_Num_Total), 0.0) AS Task_Num
 ORDER BY d.Planned_Delivery_Date
 ```
 
@@ -208,9 +208,9 @@ WHERE toUpper(info.Plan_Phase) = 'PH III' AND toUpper(info.Plan_Status) = 'ACTIV
 OPTIONAL MATCH (sdsl:Person)-[:WORKS_AS]->(s)
 WHERE sdsl.Name = s.SDSL
 OPTIONAL MATCH (sdsl)-[:REPORTS_TO*1..]->(groupLead:Person)
-WHERE toUpper(groupLead.Group_Lead) = 'Y'
+WHERE groupLead.Group_Lead IS NOT NULL AND groupLead.Group_Lead <> ''
 OPTIONAL MATCH (sdsl)-[:REPORTS_TO*1..]->(taLead:Person)
-WHERE toUpper(taLead.TA_Lead) = 'Y'
+WHERE taLead.TA_Lead IS NOT NULL AND taLead.TA_Lead <> ''
 RETURN
   s.Name AS Study_Name,
   s.SDSL AS SDSL_Name,
@@ -232,7 +232,7 @@ ORDER BY Study_Name
 ```cypher
 MATCH (d:Delivery {Name: "{{delivery_name}}"})
 OPTIONAL MATCH (d)-[sdtmRel:HAS_SDTM]->(sdtm:SDTM)
-OPTIONAL MATCH (d)-[adamRel:HAS_ADAM]->(adam:ADAM)
+OPTIONAL MATCH (d)-[adamRel:HAS_ADAM]->(adam:ADaM)
 OPTIONAL MATCH (d)-[tlfRel:HAS_TLF]->(tlf:TLF)
 WITH d,
   collect(DISTINCT {Category: sdtm.Category, Type: sdtm.Type, Name: sdtm.Name, Generation: sdtmRel.Generation, QC: sdtmRel.QC}) +
@@ -260,7 +260,7 @@ MATCH (p:Person)-[w:WORKS_ON]->(d)
 WHERE toUpper(replace(p.Name, " ", "")) = toUpper(replace("{{person_name}}", " ", ""))
 OPTIONAL MATCH (d)-[sdtmRel:HAS_SDTM]->(sdtm:SDTM)
 WHERE sdtmRel.Generation CONTAINS "{{person_name}}" OR sdtmRel.QC CONTAINS "{{person_name}}"
-OPTIONAL MATCH (d)-[adamRel:HAS_ADAM]->(adam:ADAM)
+OPTIONAL MATCH (d)-[adamRel:HAS_ADAM]->(adam:ADaM)
 WHERE adamRel.Generation CONTAINS "{{person_name}}" OR adamRel.QC CONTAINS "{{person_name}}"
 OPTIONAL MATCH (d)-[tlfRel:HAS_TLF]->(tlf:TLF)
 WHERE tlfRel.Generation CONTAINS "{{person_name}}" OR tlfRel.QC CONTAINS "{{person_name}}"
@@ -272,7 +272,7 @@ UNWIND filteredItems AS item
 RETURN
   d.Name AS DID,
   p.Name AS Person,
-  w.Task_Num AS Task_Num,
+  coalesce(toFloat(w.CSR_Task_Num_Total), 0.0) + coalesce(toFloat(w.SDA_Task_Num_Total), 0.0) + coalesce(toFloat(w.STD_Task_Num_Total), 0.0) + coalesce(toFloat(w.esub_Data_Num_Total), 0.0) AS Task_Num,
   item.Category AS Category,
   item.Type AS Type,
   item.Name AS Name,
@@ -290,8 +290,8 @@ ORDER BY item.Type, item.Name
 MATCH (x:Person)
 WHERE replace(toUpper(x.Name), " ", "") = replace(toUpper("{{person_name}}"), " ", "")
 OPTIONAL MATCH (x)-[:REPORTS_TO*1..]->(y:Person)
-WHERE y.Manager = "Y"
-WITH CASE WHEN x.Manager = "Y" THEN x ELSE y END AS managerY
+WHERE y.Manager IS NOT NULL AND y.Manager <> ''
+WITH CASE WHEN x.Manager IS NOT NULL AND x.Manager <> '' THEN x ELSE y END AS managerY
 MATCH (teamMember:Person)-[:REPORTS_TO]->(managerY)
 RETURN
   managerY.Name AS Manager_Name,
@@ -305,12 +305,12 @@ ORDER BY Team_Member_Name
 MATCH (s:Study {Name: "{{study_name}}"})-[:HAS_DELIVERY]->(d:Delivery)
 WHERE NOT toUpper(d.DID_Status) IN ['COMPLETED', 'CANCELLED', 'TERMINATED']
 MATCH (p:Person)-[w:WORKS_ON]->(d)
-WITH p, d, w.Task_Num AS TaskNum_TargetStudy
+WITH p, d, coalesce(toFloat(w.CSR_Task_Num_Total), 0.0) + coalesce(toFloat(w.SDA_Task_Num_Total), 0.0) + coalesce(toFloat(w.STD_Task_Num_Total), 0.0) + coalesce(toFloat(w.esub_Data_Num_Total), 0.0) AS TaskNum_TargetStudy
 OPTIONAL MATCH (p)-[w2:WORKS_ON]->(d2:Delivery)
 WHERE d2.Study <> "{{study_name}}" AND NOT toUpper(d2.DID_Status) IN ['COMPLETED', 'CANCELLED', 'TERMINATED']
 WITH p.Name AS PersonName,
      collect(DISTINCT {Delivery: d.Name, TaskNum: TaskNum_TargetStudy}) AS TargetStudy_Deliveries,
-     collect(DISTINCT {Delivery: d2.Name, TaskNum: w2.Task_Num}) AS Other_Deliveries
+     collect(DISTINCT {Delivery: d2.Name, TaskNum: coalesce(toFloat(w2.CSR_Task_Num_Total), 0.0) + coalesce(toFloat(w2.SDA_Task_Num_Total), 0.0) + coalesce(toFloat(w2.STD_Task_Num_Total), 0.0) + coalesce(toFloat(w2.esub_Data_Num_Total), 0.0)}) AS Other_Deliveries
 RETURN PersonName, TargetStudy_Deliveries, Other_Deliveries
 ORDER BY PersonName
 ```
@@ -320,15 +320,15 @@ ORDER BY PersonName
 ```cypher
 CALL {
   MATCH (taLead:Person)
-  WHERE taLead.TA_Lead = 'Y'
+  WHERE taLead.TA_Lead IS NOT NULL AND taLead.TA_Lead <> ''
   MATCH (person:Person)-[:REPORTS_TO*1..]->(taLead)
   MATCH (person)-[w:WORKS_ON]->(d:Delivery {Name: "{{delivery_name}}"})
-  WITH taLead.Name AS TA_Lead_Task, COLLECT(w.Task_Num) AS taskNums
-  RETURN TA_Lead_Task, SUM(REDUCE(taskSum = 0, num IN taskNums | taskSum + num)) AS Total_Tasks
+  WITH taLead.Name AS TA_Lead_Task, SUM(coalesce(toFloat(w.CSR_Task_Num_Total), 0.0) + coalesce(toFloat(w.SDA_Task_Num_Total), 0.0) + coalesce(toFloat(w.STD_Task_Num_Total), 0.0) + coalesce(toFloat(w.esub_Data_Num_Total), 0.0)) AS Total_Tasks
+  RETURN TA_Lead_Task, Total_Tasks
 }
 CALL {
   MATCH (taLead:Person)
-  WHERE taLead.TA_Lead = 'Y'
+  WHERE taLead.TA_Lead IS NOT NULL AND taLead.TA_Lead <> ''
   MATCH (person:Person)-[:REPORTS_TO*1..]->(taLead)
   MATCH (person)-[t:TIME_ON]->(dm:DIDN_Month)-[:BELONGS_TO]->(d:Delivery {Name: "{{delivery_name}}"})
   WITH taLead.Name AS TA_Lead_Hour, COLLECT(t.Hour) AS hourList
@@ -350,7 +350,7 @@ CALL {
   MATCH (p1:Person)-[:FROM_SITE]->(site:Site)
   MATCH (p1)-[w:WORKS_ON]->(d1:Delivery)
   WHERE d1.DID_Status = "Completed"
-  RETURN site.Name AS Site, d1.Year AS Year, SUM(w.Task_Num) AS Total_Tasks
+  RETURN site.Name AS Site, d1.Year AS Year, SUM(coalesce(toFloat(w.CSR_Task_Num_Total), 0.0) + coalesce(toFloat(w.SDA_Task_Num_Total), 0.0) + coalesce(toFloat(w.STD_Task_Num_Total), 0.0) + coalesce(toFloat(w.esub_Data_Num_Total), 0.0)) AS Total_Tasks
 }
 WITH collect({Site: Site, Year: Year, Total_Tasks: Total_Tasks}) AS taskResults
 CALL {
@@ -362,11 +362,11 @@ CALL {
 WITH taskResults, collect({Site: Site, Year: Year, Total_Hours: Total_Hours}) AS hourResults
 WITH taskResults, hourResults,
      [x IN taskResults | {Site: x.Site, Year: x.Year}] + [y IN hourResults | {Site: y.Site, Year: y.Year}] AS allKeys
-WITH taskResults, hourResults, apoc.coll.toSet(allKeys) AS uniqueKeys
-UNWIND uniqueKeys AS key
-WITH key.Site AS Site, key.Year AS Year,
-     [x IN taskResults WHERE x.Site = key.Site AND x.Year = key.Year | x.Total_Tasks][0] AS Total_Tasks,
-     [y IN hourResults WHERE y.Site = key.Site AND y.Year = key.Year | y.Total_Hours][0] AS Total_Hours
+UNWIND allKeys AS key
+WITH DISTINCT key.Site AS Site, key.Year AS Year, taskResults, hourResults
+WITH Site, Year,
+     [x IN taskResults WHERE x.Site = Site AND x.Year = Year | x.Total_Tasks][0] AS Total_Tasks,
+     [y IN hourResults WHERE y.Site = Site AND y.Year = Year | y.Total_Hours][0] AS Total_Hours
 RETURN Site, Year,
        COALESCE(Total_Tasks, 0) AS Total_Tasks,
        COALESCE(Total_Hours, 0) AS Total_Hours,
@@ -379,17 +379,17 @@ ORDER BY Site, Year
 ```cypher
 CALL {
   MATCH (taLead1:Person)
-  WHERE taLead1.TA_Lead = 'Y'
+  WHERE taLead1.TA_Lead IS NOT NULL AND taLead1.TA_Lead <> ''
   MATCH (person1:Person)-[:REPORTS_TO*1..]->(taLead1)
   MATCH (person1)-[w:WORKS_ON]->(d1:Delivery)
   WHERE d1.DID_Status = "Completed"
-  WITH taLead1.Name AS TA_Lead, SUM(w.Task_Num) AS Total_Tasks
+  WITH taLead1.Name AS TA_Lead, SUM(coalesce(toFloat(w.CSR_Task_Num_Total), 0.0) + coalesce(toFloat(w.SDA_Task_Num_Total), 0.0) + coalesce(toFloat(w.STD_Task_Num_Total), 0.0) + coalesce(toFloat(w.esub_Data_Num_Total), 0.0)) AS Total_Tasks
   RETURN TA_Lead, Total_Tasks
 }
 WITH collect({TA_Lead: TA_Lead, Total_Tasks: Total_Tasks}) AS taskResults
 CALL {
   MATCH (taLead2:Person)
-  WHERE taLead2.TA_Lead = 'Y'
+  WHERE taLead2.TA_Lead IS NOT NULL AND taLead2.TA_Lead <> ''
   MATCH (person2:Person)-[:REPORTS_TO*1..]->(taLead2)
   MATCH (person2)-[t:TIME_ON]->(dm:DIDN_Month)-[:BELONGS_TO]->(d2:Delivery)
   WHERE d2.DID_Status = "Completed"
@@ -399,8 +399,8 @@ CALL {
 WITH taskResults, collect({TA_Lead: TA_Lead, Total_Hours: Total_Hours}) AS hourResults
 WITH taskResults, hourResults,
      [x IN taskResults | x.TA_Lead] + [y IN hourResults | y.TA_Lead] AS allLeads
-WITH taskResults, hourResults, apoc.coll.toSet(allLeads) AS uniqueLeads
-UNWIND uniqueLeads AS TA_Lead
+UNWIND allLeads AS TA_Lead
+WITH DISTINCT TA_Lead, taskResults, hourResults
 WITH TA_Lead,
      [x IN taskResults WHERE x.TA_Lead = TA_Lead | x.Total_Tasks][0] AS Total_Tasks,
      [y IN hourResults WHERE y.TA_Lead = TA_Lead | y.Total_Hours][0] AS Total_Hours
@@ -420,10 +420,10 @@ CALL {
   WHERE taLead.Name = "{{ta_lead_name}}"
   MATCH (person1:Person)-[:REPORTS_TO*1..]->(taLead)
   MATCH (gl1:Person)<-[:REPORTS_TO*1..]-(person1)
-  WHERE gl1.Group_Lead = 'Y'
+  WHERE gl1.Group_Lead IS NOT NULL AND gl1.Group_Lead <> ''
   MATCH (person1)-[w:WORKS_ON]->(d1:Delivery)
   WHERE d1.DID_Status = "Completed"
-  WITH gl1.Name AS GL_Lead, SUM(w.Task_Num) AS Total_Tasks
+  WITH gl1.Name AS GL_Lead, SUM(coalesce(toFloat(w.CSR_Task_Num_Total), 0.0) + coalesce(toFloat(w.SDA_Task_Num_Total), 0.0) + coalesce(toFloat(w.STD_Task_Num_Total), 0.0) + coalesce(toFloat(w.esub_Data_Num_Total), 0.0)) AS Total_Tasks
   RETURN GL_Lead, Total_Tasks
 }
 WITH collect({GL_Lead: GL_Lead, Total_Tasks: Total_Tasks}) AS taskResults
@@ -432,7 +432,7 @@ CALL {
   WHERE taLead.Name = "{{ta_lead_name}}"
   MATCH (person2:Person)-[:REPORTS_TO*1..]->(taLead)
   MATCH (gl2:Person)<-[:REPORTS_TO*1..]-(person2)
-  WHERE gl2.Group_Lead = 'Y'
+  WHERE gl2.Group_Lead IS NOT NULL AND gl2.Group_Lead <> ''
   MATCH (person2)-[t:TIME_ON]->(dm:DIDN_Month)-[:BELONGS_TO]->(d2:Delivery)
   WHERE d2.DID_Status = "Completed"
   WITH gl2.Name AS GL_Lead, toInteger(SUM(t.Hour)) AS Total_Hours
@@ -441,8 +441,8 @@ CALL {
 WITH taskResults, collect({GL_Lead: GL_Lead, Total_Hours: Total_Hours}) AS hourResults
 WITH taskResults, hourResults,
      [x IN taskResults | x.GL_Lead] + [y IN hourResults | y.GL_Lead] AS allLeads
-WITH taskResults, hourResults, apoc.coll.toSet(allLeads) AS uniqueLeads
-UNWIND uniqueLeads AS GL_Lead
+UNWIND allLeads AS GL_Lead
+WITH DISTINCT GL_Lead, taskResults, hourResults
 WITH GL_Lead,
      [x IN taskResults WHERE x.GL_Lead = GL_Lead | x.Total_Tasks][0] AS Total_Tasks,
      [y IN hourResults WHERE y.GL_Lead = GL_Lead | y.Total_Hours][0] AS Total_Hours

@@ -12,6 +12,9 @@ Uses network Neo4j + Pfizer Vox GenAI.
 | `app.py` | Streamlit entry point (publish this) |
 | `agent.py` | NL → Cypher → answer (loads domain docs/examples for few-shot prompting) |
 | `result_presentation.py` | Validates a constrained, post-query table/chart selection |
+| `ui_results.py` | Insight2-style org chart, labeled charts, and relationship graph |
+| `example_memory.py` | Thumbs-up example library used for positive few-shot training |
+| `export.py` | CSV / JSON table download |
 | `neo4j_client.py` | Read-only Neo4j access |
 | `vox_client.py` | Vox OAuth + chat completions + model listing |
 | `docs/skill.md` | DID query skill rules |
@@ -214,6 +217,9 @@ Important limitations:
   - `docs/skill.md`
   - `docs/schema.md`
   - the most relevant example files from `docs/examples/*.md`
+  - 👍 user-endorsed Q+Cypher pairs from `data/memory/` (local, not committed)
+- After an answer, download the result table as CSV/JSON, or mark 👍 to grow that
+  positive example library. 👎 excludes a case from future few-shot use.
 - This keeps existing examples usable after you push to GitHub and deploy on RSC.
 
 ## Deploy to Posit Connect

@@ -20,7 +20,6 @@ from effort_prediction import (
     GITHUB_ARTIFACT_BASE_URL,
     TLF_SEMANTIC_MATCH_THRESHOLD,
     _cached_tlf_semantic_similarity,
-    _assignment_matches,
     _load_similarity_cache,
     _normalized_name,
     _resolve_prediction_artifact,
@@ -40,12 +39,9 @@ WITH DISTINCT toString(p.Team_Lead_Name) AS du_team, d
 CALL (du_team) {
   MATCH (member:Person)
   WHERE toString(member.Team_Lead_Name) = du_team
-  RETURN collect(DISTINCT CASE
-    WHEN member.Group_Lead_Name IS NOT NULL
-      AND trim(toString(member.Group_Lead_Name)) <> ''
-    THEN toString(member.Group_Lead_Name)
-  END) AS group_leads,
-  collect(DISTINCT toString(member.Name)) AS team_members
+    AND member.Group_Lead_Name IS NOT NULL
+    AND trim(toString(member.Group_Lead_Name)) <> ''
+  RETURN collect(DISTINCT toString(member.Group_Lead_Name)) AS group_leads
 }
 CALL (d) {
   OPTIONAL MATCH (d)-[t:HAS_TLF]->(tlf:TLF)
@@ -56,7 +52,6 @@ CALL (d) {
 }
 RETURN du_team,
        group_leads,
-       team_members,
        toString(d.DID) AS did,
        substring(toString(d.Actual_Delivery_Date), 0, 10) AS completion_date,
        tlfs
@@ -73,7 +68,7 @@ RETURN p.Team_Lead_Name AS du_team,
 """
 
 SEMANTIC_DID_CANDIDATE_LIMIT = 50
-DU_HISTORY_SNAPSHOT_VERSION = "du-team-history-v3-tlf-role-ownership"
+DU_HISTORY_SNAPSHOT_VERSION = "du-team-history-v2-tlf-only-groups"
 DEFAULT_DU_HISTORY_SNAPSHOT_PATH = (
     Path(__file__).resolve().parent / "artifacts" / "du_team_history_snapshot.joblib"
 )
@@ -126,15 +121,7 @@ def refresh_history_snapshot(
     output_path: Path = DEFAULT_DU_HISTORY_SNAPSHOT_PATH,
 ) -> dict[str, Any]:
     """Fetch current Neo4j DU evidence and save it as a reusable local snapshot."""
-    history_rows = [
-        {
-            **row,
-            "tlfs": _role_owned_tlfs(
-                row.get("tlfs", []), row.get("team_members", [])
-            ),
-        }
-        for row in _read_query(TEAM_HISTORY_QUERY)
-    ]
+    history_rows = _read_query(TEAM_HISTORY_QUERY)
     if not history_rows:
         raise ValueError("Neo4j returned no completed DU team history to cache.")
     workload_rows = _read_query(TEAM_WORKLOAD_QUERY)
@@ -233,22 +220,6 @@ def _scope_from_rows(
         "adams": _unique_items(adams),
         "sdtms": _unique_items(sdtms),
     }
-
-
-def _role_owned_tlfs(
-    tlfs: Iterable[dict[str, Any]], team_members: Iterable[Any]
-) -> list[dict[str, Any]]:
-    """Keep only TLFs actually assigned to a current DU member as Gen or QC."""
-    members = [str(member).strip() for member in team_members if str(member).strip()]
-    return [
-        tlf
-        for tlf in tlfs
-        if any(
-            _assignment_matches(tlf.get(role), member)
-            for member in members
-            for role in ("generation", "qc")
-        )
-    ]
 
 
 def group_lead_candidates(history_rows: Iterable[dict[str, Any]]) -> list[str]:

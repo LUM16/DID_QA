@@ -73,7 +73,17 @@ Auto-parameterized query to summarize DIDs and tasks for a specific study
 **Cypher**
 
 ```cypher
-WITH "{{study:Study name}}" AS specificStudyName MATCH (study:Study {Name: specificStudyName})-[:HAS_DELIVERY]->(delivery:Delivery) WHERE delivery.DID_Status = 'Completed' RETURN study.Name AS Specific_Study_Name, COUNT(DISTINCT delivery.DID) AS Total_DIDs, SUM(delivery.Total_Task_Num) AS Total_Tasks, SUM(delivery.SDTM_Num) AS Total_SDTM_Tasks, SUM(delivery.ADAM_Num) AS Total_ADaM_Tasks, SUM(delivery.TLF_Num) AS Total_TLF_Tasks ORDER BY Specific_Study_Name;
+WITH '{{study:Study name}}' AS specificStudyName
+MATCH (study:Study {Name: specificStudyName})-[:HAS_DELIVERY]->(delivery:Delivery)
+WHERE delivery.DID_Status = 'Completed'
+OPTIONAL MATCH (:Person)-[w:WORKS_ON]->(delivery)
+RETURN study.Name AS Specific_Study_Name,
+       count(DISTINCT delivery.DID) AS Total_DIDs,
+       sum(coalesce(toFloat(w.CSR_Task_Num_Total), 0.0) + coalesce(toFloat(w.SDA_Task_Num_Total), 0.0) + coalesce(toFloat(w.STD_Task_Num_Total), 0.0) + coalesce(toFloat(w.esub_Data_Num_Total), 0.0)) AS Total_Tasks,
+       sum(coalesce(toFloat(w.CSR_SDTM_Num_Total), 0.0)) AS Total_SDTM_Tasks,
+       sum(coalesce(toFloat(w.CSR_ADaM_Num_Total), 0.0)) AS Total_ADaM_Tasks,
+       sum(coalesce(toFloat(w.CSR_TLF_Num_Total), 0.0)) AS Total_TLF_Tasks
+ORDER BY Specific_Study_Name
 ```
 
 ## q067: Please summarize tasks including {{task_type:Task type}} completed by each person for specific study {{study:Study name}} and DID {{delivery_id:Delivery ID}}
@@ -94,7 +104,18 @@ Auto-parameterized query to summarize person-level tasks for a specific study DI
 **Cypher**
 
 ```cypher
-WITH "{{study:Study name}}" AS specificStudyName, "{{delivery_id:Delivery ID}}" AS specificDID MATCH (study:Study {Name: specificStudyName})-[:HAS_DELIVERY]->(delivery:Delivery {Name: specificDID}) WHERE delivery.DID_Status = 'Completed' MATCH (person:Person)-[workOn:WORKS_ON]->(delivery) RETURN person.Name AS Person_Name, study.Name AS Study_Name, delivery.Name AS Target_DID, workOn.Task_Num_Total AS Total_Completed_Tasks_In_DID, workOn.SDTM_Num_Total AS SDTM_Tasks_In_DID, workOn.ADaM_Num_Total AS ADaM_Tasks_In_DID, workOn.TLF_Num_Total AS TLF_Tasks_In_DID ORDER BY Total_Completed_Tasks_In_DID DESC;
+WITH '{{study:Study name}}' AS specificStudyName, '{{did:DID}}' AS specificDID
+MATCH (study:Study {Name: specificStudyName})-[:HAS_DELIVERY]->(delivery:Delivery {Name: specificDID})
+WHERE delivery.DID_Status = 'Completed'
+MATCH (person:Person)-[workOn:WORKS_ON]->(delivery)
+RETURN person.Name AS Person_Name,
+       study.Name AS Study_Name,
+       delivery.Name AS Target_DID,
+       coalesce(toFloat(workOn.CSR_Task_Num_Total), 0.0) + coalesce(toFloat(workOn.SDA_Task_Num_Total), 0.0) + coalesce(toFloat(workOn.STD_Task_Num_Total), 0.0) + coalesce(toFloat(workOn.esub_Data_Num_Total), 0.0) AS Total_Completed_Tasks_In_DID,
+       coalesce(toFloat(workOn.CSR_SDTM_Num_Total), 0.0) AS SDTM_Tasks_In_DID,
+       coalesce(toFloat(workOn.CSR_ADaM_Num_Total), 0.0) AS ADaM_Tasks_In_DID,
+       coalesce(toFloat(workOn.CSR_TLF_Num_Total), 0.0) AS TLF_Tasks_In_DID
+ORDER BY Total_Completed_Tasks_In_DID DESC
 ```
 
 ## q070: Please summarize the time spent on specific study {{study:Study name}} and DID {{delivery_id:Delivery ID}} by all participants
@@ -137,7 +158,26 @@ Auto-parameterized query to summarize participants' tasks in a specific DID and 
 **Cypher**
 
 ```cypher
-WITH "{{delivery_id:Delivery ID}}" AS specificDID, date({year: {{start_year:Year}}, month: {{start_month:Month}}, day: 1}) AS timePeriodStart, date({year: {{end_year:Year}}, month: {{end_month:Month}}, day: 30}) AS timePeriodEnd MATCH (delivery:Delivery {Name: specificDID}) MATCH (participant:Person)-[workOn:WORKS_ON]->(delivery) OPTIONAL MATCH (participant)-[:TIME_ON]->(didMonth:DIDN_Month)-[:BELONGS_TO]->(delivery) WHERE (didMonth.Year * 12 + didMonth.Month) >= (timePeriodStart.year * 12 + timePeriodStart.month) AND (didMonth.Year * 12 + didMonth.Month) <= (timePeriodEnd.year * 12 + timePeriodEnd.month) AND delivery.DID_Status IN ["Ongoing", "Completed", "Planned"] RETURN timePeriodStart, timePeriodEnd, delivery.Name AS Target_DID, delivery.Study AS Associated_Study_Name, participant.Name AS Participant_Name, COALESCE(SUM(workOn.Task_Num_Total), 0) AS Total_Tasks_In_Period, COALESCE(SUM(workOn.SDTM_Num_Total), 0) AS SDTM_Tasks_In_Period, COALESCE(SUM(workOn.ADaM_Num_Total), 0) AS ADaM_Tasks_In_Period, COALESCE(SUM(workOn.TLF_Num_Total), 0) AS TLF_Tasks_In_Period ORDER BY Total_Tasks_In_Period DESC;
+WITH '{{delivery_id:Delivery ID}}' AS specificDID,
+     date({year: {{start_year:Year}}, month: {{start_month:Month}}, day: 1}) AS timePeriodStart,
+     date({year: {{end_year:Year}}, month: {{end_month:Month}}, day: 1}) AS timePeriodEnd
+MATCH (delivery:Delivery {Name: specificDID})
+MATCH (participant:Person)-[workOn:WORKS_ON]->(delivery)
+OPTIONAL MATCH (participant)-[timeOn:TIME_ON]->(didMonth:DIDN_Month)-[:BELONGS_TO]->(delivery)
+WHERE didMonth.Year * 12 + didMonth.Month >= timePeriodStart.year * 12 + timePeriodStart.month
+  AND didMonth.Year * 12 + didMonth.Month <= timePeriodEnd.year * 12 + timePeriodEnd.month
+  AND delivery.DID_Status IN ['Ongoing', 'Completed', 'Planned']
+WITH timePeriodStart, timePeriodEnd, delivery, participant, workOn
+ORDER BY participant.Name
+RETURN timePeriodStart, timePeriodEnd,
+       delivery.Name AS Target_DID,
+       delivery.Study AS Associated_Study_Name,
+       participant.Name AS Participant_Name,
+       coalesce(toFloat(workOn.CSR_Task_Num_Total), 0.0) + coalesce(toFloat(workOn.SDA_Task_Num_Total), 0.0) + coalesce(toFloat(workOn.STD_Task_Num_Total), 0.0) + coalesce(toFloat(workOn.esub_Data_Num_Total), 0.0) AS Total_Tasks_In_Period,
+       coalesce(toFloat(workOn.CSR_SDTM_Num_Total), 0.0) AS SDTM_Tasks_In_Period,
+       coalesce(toFloat(workOn.CSR_ADaM_Num_Total), 0.0) AS ADaM_Tasks_In_Period,
+       coalesce(toFloat(workOn.CSR_TLF_Num_Total), 0.0) AS TLF_Tasks_In_Period
+ORDER BY Total_Tasks_In_Period DESC
 ```
 
 ## q072: Please summarize the details of {{keyword:Delivery keyword}} deliveries for this month
@@ -175,7 +215,16 @@ Auto-parameterized query to summarize SDTM/ADaM/TLF counts per DID and study
 **Cypher**
 
 ```cypher
-MATCH (study:Study)-[:HAS_DELIVERY]->(delivery:Delivery) WHERE delivery.SDTM_Num IS NOT NULL AND delivery.ADAM_Num IS NOT NULL AND delivery.TLF_Num IS NOT NULL RETURN study.Name AS Study_Name, delivery.DID AS DID, delivery.DID_Status AS Delivery_Status, delivery.SDTM_Num AS Total_SDTM, delivery.ADAM_Num AS Total_ADaM, delivery.TLF_Num AS Total_TLF, (delivery.SDTM_Num + delivery.ADAM_Num + delivery.TLF_Num) AS Total_Tasks_Per_DID ORDER BY Study_Name, DID;
+MATCH (study:Study)-[:HAS_DELIVERY]->(delivery:Delivery)
+WHERE delivery.CSR_SDTM_Num IS NOT NULL OR delivery.CSR_ADaM_Num IS NOT NULL OR delivery.CSR_TLF_Num IS NOT NULL
+RETURN study.Name AS Study_Name,
+       delivery.DID AS DID,
+       delivery.DID_Status AS Delivery_Status,
+       coalesce(toFloat(delivery.CSR_SDTM_Num), 0.0) AS Total_SDTM,
+       coalesce(toFloat(delivery.CSR_ADaM_Num), 0.0) AS Total_ADaM,
+       coalesce(toFloat(delivery.CSR_TLF_Num), 0.0) AS Total_TLF,
+       coalesce(toFloat(delivery.CSR_SDTM_Num), 0.0) + coalesce(toFloat(delivery.CSR_ADaM_Num), 0.0) + coalesce(toFloat(delivery.CSR_TLF_Num), 0.0) AS Total_Tasks_Per_DID
+ORDER BY Study_Name, DID
 ```
 
 ## q077: What is the {{date_type:Date type}} for each DID and Study
@@ -213,7 +262,23 @@ Auto-parameterized query to calculate participant work percentage for a specific
 **Cypher**
 
 ```cypher
-WITH "{{delivery_id:Delivery ID}}" AS specificDID MATCH (study:Study)-[:HAS_DELIVERY]->(delivery:Delivery {DID: specificDID}), (participant:Person)-[work:WORKS_ON]->(delivery) WHERE delivery.DID_Status IN ["Completed", "Ongoing"] AND work.Task_Num_Total IS NOT NULL AND work.Task_Num_Total > 0 WITH study.Name AS Study_Name, specificDID AS Target_DID, delivery.DID_Status AS Delivery_Status, participant, work.Task_Num_Total AS participantTaskCount, delivery.Total_Task_Num AS Total_Tasks_For_DID WITH DISTINCT Study_Name, Target_DID, Delivery_Status, participant, participantTaskCount, Total_Tasks_For_DID RETURN Study_Name, Target_DID, Delivery_Status, participant.Name AS Participant_Name, participantTaskCount AS Tasks_Completed_By_Participant, Total_Tasks_For_DID AS Total_Tasks_In_DID, round((toFloat(participantTaskCount) / Total_Tasks_For_DID) * 100, 2) AS Work_Percentage ORDER BY Work_Percentage DESC;
+WITH '{{delivery_id:Delivery ID}}' AS specificDID
+MATCH (delivery:Delivery {DID: specificDID})
+MATCH (participant:Person)-[work:WORKS_ON]->(delivery)
+WITH delivery, participant,
+     coalesce(toFloat(work.CSR_Task_Num_Total), 0.0) + coalesce(toFloat(work.SDA_Task_Num_Total), 0.0) + coalesce(toFloat(work.STD_Task_Num_Total), 0.0) + coalesce(toFloat(work.esub_Data_Num_Total), 0.0) AS participantTaskCount
+WITH delivery,
+     collect({Participant_Name: participant.Name, Participant_Tasks: participantTaskCount}) AS participantTasks,
+     sum(participantTaskCount) AS totalTasksForDID
+UNWIND participantTasks AS participantTask
+RETURN delivery.Study AS Study_Name,
+       delivery.DID AS Target_DID,
+       delivery.DID_Status AS Delivery_Status,
+       participantTask.Participant_Name AS Participant_Name,
+       participantTask.Participant_Tasks AS Tasks_For_Participant,
+       totalTasksForDID AS Total_Tasks_For_DID,
+       CASE WHEN totalTasksForDID = 0 THEN 0.0 ELSE round(toFloat(participantTask.Participant_Tasks) / totalTasksForDID * 100, 2) END AS Work_Percentage
+ORDER BY Work_Percentage DESC
 ```
 
 ## q096: Quickly display the DIDs for a specific project.
@@ -274,14 +339,14 @@ Auto-parameterized query for question.
 **Cypher**
 
 ```cypher
-MATCH (s:Study {Name: {studyName}})-[:HAS_DELIVERY]->(d:Delivery)<-[:WORKS_ON]-(p:Person)
-MATCH (d)-[:HAS_SDTM]->(sdtm:SDTM)
-MATCH (d)-[:HAS_ADAM]->(adam:ADAM)
-MATCH (d)-[:HAS_TLF]->(tlf:TLF)
+MATCH (s:Study {Name: '{{study:Study name}}'})-[:HAS_DELIVERY]->(d:Delivery)<-[:WORKS_ON]-(p:Person)
+OPTIONAL MATCH (d)-[:HAS_SDTM]->(sdtm:SDTM)
+OPTIONAL MATCH (d)-[:HAS_ADAM]->(adam:ADaM)
+OPTIONAL MATCH (d)-[:HAS_TLF]->(tlf:TLF)
 RETURN DISTINCT p.Name AS Programmer_Name,
-COLLECT(DISTINCT sdtm.Name) AS SDTM_Domains,
-COLLECT(DISTINCT adam.Name) AS ADAM_Domains,
-COLLECT(DISTINCT tlf.Name) AS TLF_Domains
+       COLLECT(DISTINCT sdtm.Name) AS SDTM_Domains,
+       COLLECT(DISTINCT adam.Name) AS ADaM_Domains,
+       COLLECT(DISTINCT tlf.Name) AS TLF_Domains
 ```
 
 ## q107: find which DIDs are available for filling in the daily survey

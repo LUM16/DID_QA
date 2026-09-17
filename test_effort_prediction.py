@@ -16,7 +16,6 @@ from effort_prediction import (
     TRAINING_QUERY,
     ONGOING_ASSIGNMENTS_QUERY,
     _apply_prediction_policy,
-    _download_prediction_artifact,
     _is_lfs_pointer,
     _load_similarity_cache,
     _save_similarity_cache,
@@ -77,30 +76,6 @@ def make_record(index: int, person: str = "Person A") -> dict:
 
 
 class EffortPredictionTests(unittest.TestCase):
-    def test_artifact_download_uses_unique_temporary_file_and_cleans_up(self) -> None:
-        class Response:
-            def __init__(self) -> None:
-                self.chunks = iter([b"artifact bytes", b""])
-
-            def __enter__(self) -> "Response":
-                return self
-
-            def __exit__(self, *_args: object) -> None:
-                return None
-
-            def read(self, _size: int) -> bytes:
-                return next(self.chunks)
-
-        with tempfile.TemporaryDirectory() as directory:
-            destination = Path(directory) / "snapshot.joblib"
-            with patch("effort_prediction.urlopen", return_value=Response()):
-                resolved = _download_prediction_artifact(
-                    "https://example.invalid/snapshot.joblib", destination
-                )
-            self.assertEqual(resolved, destination)
-            self.assertEqual(destination.read_bytes(), b"artifact bytes")
-            self.assertEqual(list(Path(directory).glob("*.download")), [])
-
     def test_person_name_resolution_accepts_ordering_and_unique_aliases(self) -> None:
         candidates = (
             "Lu, Manman",

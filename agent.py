@@ -9,7 +9,8 @@ from pathlib import Path
 from typing import Any
 
 from effort_prediction import person_name_candidates, predict_effort
-from neo4j_client import get_schema, load_env, run_cypher
+from example_memory import format_positive_examples, get_memory
+from neo4j_client import get_schema, last_query_meta, load_env, run_cypher
 from result_presentation import select_result_presentation
 from vox_client import add_usage, chat as _chat, empty_usage
 
@@ -23,7 +24,20 @@ EXAMPLE_KEYWORDS = {
     "workload_planning.md": ("capacity", "plan", "planned", "ongoing", "workload", "resource", "规划", "负载"),
     "study_delivery.md": ("study", "delivery", "did", "status", "里程碑", "交付"),
     "lot_tlf_sdtm_adam.md": ("lot", "tlf", "sdtm", "adam", "submission", "产出物"),
-    "team_manager.md": ("manager", "group lead", "ta lead", "team", "reports to", "经理", "团队"),
+    "team_manager.md": (
+        "manager",
+        "group lead",
+        "ta lead",
+        "team",
+        "reports to",
+        "org",
+        "org chart",
+        "organization",
+        "hierarchy",
+        "经理",
+        "团队",
+        "组织",
+    ),
     "reporting_dashboard.md": ("dashboard", "kpi", "trend", "monthly", "reporting", "看板", "报表"),
 }
 DEFAULT_EXAMPLES = (
@@ -485,6 +499,9 @@ def answer_effort_prediction(
         "error": None,
         "usage": add_usage(initial_usage or empty_usage(), usage),
         "prediction": prediction,
+        "case_id": None,
+        "graph": {},
+        "columns": list(prediction.keys()),
     }
 
 
@@ -526,6 +543,13 @@ def _build_domain_context(question: str) -> str:
     ]
 
     selected = _select_examples(question)
+    try:
+        endorsed = format_positive_examples(get_memory().positive_examples(question, limit=3))
+    except Exception:  # noqa: BLE001 - example memory must not break Cypher generation
+        endorsed = ""
+    if endorsed:
+        parts.extend(["", endorsed])
+
     for filename in (*selected, *[name for name in SAFE_EXAMPLE_FILES if name not in selected]):
         example_path = EXAMPLES_ROOT / filename
         if not example_path.exists():
@@ -560,7 +584,9 @@ Rules:
 7. Cypher keywords stay in English; do not translate labels/properties.
 8. Follow rules and safe patterns from docs/skill.md, docs/schema.md, and docs/examples/*.md (ignore sensitive_excluded.md).
 9. Prefer business query patterns from person_productivity.md, workload_planning.md, study_delivery.md, lot_tlf_sdtm_adam.md, team_manager.md, reporting_dashboard.md, and query_index.md.
-10. Do not generate employee ranking/performance-scoring queries."""
+10. Do not generate employee ranking/performance-scoring queries.
+11. When user-endorsed thumbs-up examples are provided, prefer those Cypher patterns if they match the question.
+12. For org-chart / reporting-tree questions, prefer the scalar template columns person, reporting_level, reports_to, status so the UI can render both a table and an organization chart."""
 
     user = f"""Schema:
 {schema_text}
@@ -681,6 +707,25 @@ def _needs_repair(question: str, rows: list[dict[str, Any]], cypher: str) -> boo
     return "optional match" in cypher.lower() and "where" in cypher.lower()
 
 
+def _remember_case(question: str, cypher: str, rows: list[dict[str, Any]], error: str | None) -> int | None:
+    try:
+        outcome = "error" if error else ("success" if rows else "empty")
+        return get_memory().add_case(
+            question, cypher, outcome=outcome, row_count=len(rows or [])
+        )
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _graph_for_cypher(cypher: str) -> dict[str, Any]:
+    meta = last_query_meta() or {}
+    expected = (cypher or "").strip().rstrip(";")
+    actual = str(meta.get("cypher") or "").strip().rstrip(";")
+    if expected and actual == expected:
+        return meta.get("graph") or {}
+    return {}
+
+
 def ask(
     question: str,
     history: list[dict[str, Any]] | None = None,
@@ -739,16 +784,21 @@ def ask(
                     structured_presentation=visualization is not None,
                 )
                 usage = add_usage(usage, u2)
+            case_id = _remember_case(question, cypher, rows, None)
+            columns = list(dict.fromkeys(key for row in rows for key in row))
             return {
                 "answer": answer,
                 "cypher": cypher,
                 "rows": rows,
+                "columns": columns,
                 "schema": schema,
                 "error": None,
                 "usage": usage,
                 "visualization": visualization,
                 "table": visualization.get("table") if visualization else None,
                 "presentation_warning": presentation_warning,
+                "case_id": case_id,
+                "graph": _graph_for_cypher(cypher),
             }
         except Exception as exc:  # noqa: BLE001
             last_error = str(exc)
@@ -757,7 +807,10 @@ def ask(
         "answer": f"Query failed after 3 attempts: {last_error}",
         "cypher": cypher,
         "rows": [],
+        "columns": [],
         "schema": schema,
         "error": last_error,
         "usage": usage,
+        "case_id": _remember_case(question, cypher, [], last_error),
+        "graph": {},
     }

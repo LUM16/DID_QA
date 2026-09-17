@@ -42,6 +42,10 @@ Use the topic examples in `examples/` as few-shot references:
 - `team_manager.md`
 - `reporting_dashboard.md`
 
+For org-chart or reporting-tree questions, prefer this scalar return shape so the UI can render both a table and an organization chart:
+
+`person`, `reporting_level`, `reports_to`, `status`
+
 When answering a new question:
 
 1. Identify the user's business intent.

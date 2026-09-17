@@ -19,23 +19,24 @@ Auto-parameterized query for question
 **Cypher**
 
 ```cypher
-MATCH (p:Person {Name: {{person_name:Person name}})-[r:WORKS_ON]->(d:Delivery)
+MATCH (p:Person {Name: '{{person:Person name}}'})-[r:WORKS_ON]->(d:Delivery)
 WHERE d.Year = {{year:Year}}
-WITH d, r,
-     CASE WHEN d.Month <= 6 THEN 'First_Half' ELSE 'Second_Half' END as Half_Year
-WITH Half_Year,
-     COUNT(d) as Delivery_Count,
-     SUM(r.Task_Num_Total) as Total_Tasks
-MATCH (p:Person {Name: {{person_name:Person name}})-[t:TIME_ON]->(dm)
+WITH p, d, r,
+     CASE WHEN d.Month <= 6 THEN 'First_Half' ELSE 'Second_Half' END AS Half_Year,
+     coalesce(toFloat(r.CSR_Task_Num_Total), 0.0) + coalesce(toFloat(r.SDA_Task_Num_Total), 0.0) + coalesce(toFloat(r.STD_Task_Num_Total), 0.0) + coalesce(toFloat(r.esub_Data_Num_Total), 0.0) AS Task_Num
+WITH p, Half_Year,
+     count(d) AS Delivery_Count,
+     sum(Task_Num) AS Total_Tasks
+MATCH (p)-[t:TIME_ON]->(dm)
 WHERE (dm:DIDN_Month OR dm:DID0_Month OR dm:Study_Month)
-  AND ((dm.Year = {{year:Year}} AND dm.Month <= 6 AND Half_Year = 'First_Half') OR 
-       (dm.Year = {{year:Year}} AND dm.Month > 6 AND Half_Year = 'Second_Half'))
-WITH Half_Year, Delivery_Count, Total_Tasks, SUM(t.Hour) as Total_Hours
+  AND dm.Year = {{year:Year}}
+  AND ((dm.Month <= 6 AND Half_Year = 'First_Half') OR (dm.Month > 6 AND Half_Year = 'Second_Half'))
+WITH Half_Year, Delivery_Count, Total_Tasks, sum(t.Hour) AS Total_Hours
 RETURN Half_Year,
        Delivery_Count,
        Total_Tasks,
        Total_Hours,
-       ROUND(Total_Hours * 1.0 / Total_Tasks, 2) as Hours_Per_Task
+       CASE WHEN Total_Tasks = 0 THEN null ELSE round(Total_Hours * 1.0 / Total_Tasks, 2) END AS Hours_Per_Task
 ORDER BY Half_Year
 ```
 
@@ -102,24 +103,24 @@ Auto-parameterized query for question.
 **Cypher**
 
 ```cypher
-MATCH (teamMember:Person {Team_Lead_Name: {teamLeadName}})-[:WORKS_ON]->(d:Delivery)
-WHERE d.Actual_Delivery_Date >= date({startDate}) AND d.Actual_Delivery_Date <= date({endDate})
+MATCH (teamMember:Person {Team_Lead_Name: '{{team_lead:Team lead name}}'})-[:WORKS_ON]->(d:Delivery)
+WHERE d.Actual_Delivery_Date >= date('{{startDate:Start date}}') AND d.Actual_Delivery_Date <= date('{{endDate:End date}}')
 WITH teamMember, d
 MATCH (otherPerson:Person)-[:WORKS_ON]->(d)
 WHERE otherPerson <> teamMember
 WITH teamMember, otherPerson, d
 OPTIONAL MATCH (d)-[r1:HAS_SDTM]->(sdtm:SDTM)
 WHERE r1.Generation = teamMember.Name OR r1.QC = teamMember.Name
-OPTIONAL MATCH (d)-[r2:HAS_ADAM]->(adam:ADAM)
+OPTIONAL MATCH (d)-[r2:HAS_ADAM]->(adam:ADaM)
 WHERE r2.Generation = teamMember.Name OR r2.QC = teamMember.Name
 OPTIONAL MATCH (d)-[r3:HAS_TLF]->(tlf:TLF)
 WHERE r3.Generation = teamMember.Name OR r3.QC = teamMember.Name
 RETURN teamMember.Name AS Team_Member,
-COLLECT(DISTINCT otherPerson.Name) AS Collaborators,
-COLLECT(DISTINCT d.Name) AS Deliveries,
-COLLECT(DISTINCT sdtm.Name) AS SDTM_Domains,
-COLLECT(DISTINCT adam.Name) AS ADAM_Domains,
-COLLECT(DISTINCT tlf.Name) AS TLF_Domains
+       COLLECT(DISTINCT otherPerson.Name) AS Collaborators,
+       COLLECT(DISTINCT d.Name) AS Deliveries,
+       COLLECT(DISTINCT sdtm.Name) AS SDTM_Domains,
+       COLLECT(DISTINCT adam.Name) AS ADaM_Domains,
+       COLLECT(DISTINCT tlf.Name) AS TLF_Domains
 ORDER BY Team_Member
 ```
 

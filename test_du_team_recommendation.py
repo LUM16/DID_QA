@@ -12,7 +12,6 @@ from du_team_recommendation import (
     DEFAULT_DU_HISTORY_SNAPSHOT_PATH,
     _resolve_history_snapshot_path,
     _resolve_recommendation_cache_path,
-    _role_owned_tlfs,
     _scope_from_rows,
     group_lead_candidates,
     load_history_snapshot,
@@ -36,13 +35,7 @@ class TeamRecommendationTests(unittest.TestCase):
         resolver.assert_called_once()
 
     def test_refresh_and_load_history_snapshot(self) -> None:
-        history_rows = [{
-            "du_team": "Team A", "did": "DID-A", "team_members": ["Owner"],
-            "tlfs": [
-                {"name": "Owned", "generation": "Owner", "qc": ""},
-                {"name": "Observed", "generation": "Other", "qc": ""},
-            ],
-        }]
+        history_rows = [{"du_team": "Team A", "did": "DID-A"}]
         workload_rows = [{"du_team": "Team A", "active_did_count": 2}]
         with tempfile.TemporaryDirectory() as directory:
             snapshot_path = Path(directory) / "du-history.joblib"
@@ -52,7 +45,7 @@ class TeamRecommendationTests(unittest.TestCase):
             ):
                 saved = refresh_history_snapshot(snapshot_path)
             loaded_history, loaded_workload, details = load_history_snapshot(snapshot_path)
-        self.assertEqual(loaded_history[0]["tlfs"][0]["name"], "Owned")
+        self.assertEqual(loaded_history, history_rows)
         self.assertEqual(loaded_workload, workload_rows)
         self.assertEqual(saved["history_row_count"], 1)
         self.assertEqual(details["workload_row_count"], 1)
@@ -97,17 +90,6 @@ class TeamRecommendationTests(unittest.TestCase):
         self.assertEqual(scope["tlfs"][0]["name"], "AE Summary")
         self.assertEqual({item["name"] for item in scope["adams"]}, {"ADAE", "ADSL"})
         self.assertEqual(scope["sdtms"][0]["name"], "AE")
-
-    def test_role_owned_tlfs_excludes_unowned_delivery_scope(self) -> None:
-        owned = _role_owned_tlfs(
-            [
-                {"name": "Gen TLF", "generation": "Member A", "qc": ""},
-                {"name": "QC TLF", "generation": "", "qc": ["Member B"]},
-                {"name": "Unowned TLF", "generation": "Other", "qc": "Other"},
-            ],
-            ["Member A", "Member B"],
-        )
-        self.assertEqual([item["name"] for item in owned], ["Gen TLF", "QC TLF"])
 
     def test_group_lead_resolver_accepts_unique_name_token(self) -> None:
         candidates = group_lead_candidates(

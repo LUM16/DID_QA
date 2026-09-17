@@ -11,22 +11,22 @@ Summarize the deliveries of a specific person during a specified time period.
 
 ```json
 {
-"person": "Chen, Sizhen",
-      "startDate": "2025-01-01",
-      "endDate": "2025-12-31"
+  "person": "Chen, Sizhen",
+  "startDate": "2025-01-01",
+  "endDate": "2025-12-31"
 }
 ```
 
 **Cypher**
 
 ```cypher
-MATCH (p:Person {Name: {{person:Name of the person}}})-[:WORKS_ON]->(d:Delivery)
-WHERE d.Actual_Delivery_Date >= date({{startDate}}) AND d.Actual_Delivery_Date <= date({{endDate}})
-RETURN
-p.Name AS Person_Name,
-COUNT(d) AS Total_Deliveries,
-SUM(d.TLF_Num) AS Total_TLF_Volume,
-SUM(d.Total_Task_Num) AS Total_Tasks
+MATCH (p:Person {Name: '{{person:Person name}}'})-[r:WORKS_ON]->(d:Delivery)
+WHERE d.Actual_Delivery_Date >= date('{{startDate:Start date}}')
+  AND d.Actual_Delivery_Date <= date('{{endDate:End date}}')
+RETURN p.Name AS Person_Name,
+       count(DISTINCT d.Name) AS Total_Deliveries,
+       sum(coalesce(toFloat(r.CSR_TLF_Num_Total), 0.0)) AS Total_TLF_Volume,
+       sum(coalesce(toFloat(r.CSR_Task_Num_Total), 0.0) + coalesce(toFloat(r.SDA_Task_Num_Total), 0.0) + coalesce(toFloat(r.STD_Task_Num_Total), 0.0) + coalesce(toFloat(r.esub_Data_Num_Total), 0.0)) AS Total_Tasks
 ORDER BY Total_Deliveries DESC
 ```
 
@@ -39,19 +39,29 @@ Summarize the studies a specific person delivered during a specified period, alo
 
 ```json
 {
-"person": "Chen, Sizhen",
-      "startDate": "Chen, Sizhen",
-      "endDate": "2025-12-31"
+  "person": "Chen, Sizhen",
+  "startDate": "2025-01-01",
+  "endDate": "2025-12-31"
 }
 ```
 
 **Cypher**
 
 ```cypher
-MATCH (p:Person {Name: {{person:Name of the person}}})-[wo:WORKS_ON]->(d:Delivery)<-[:HAS_DELIVERY]-(s:Study)
-WHERE d.Actual_Delivery_Date >= date({{startDate}} AND d.Actual_Delivery_Date <= date({{endDate}}
-WITH s, COLLECT(d.Name) AS deliveries, SUM(wo.Task_Num_Total) AS Person_Task_Sum,REDUCE(Total_Study_Task_Num = 0, de IN [(s)-[:HAS_DELIVERY]->(de:Delivery) | de] | Total_Study_Task_Num + COALESCE(de.Total_Task_Num, 0)) AS Total_Study_Task_Num
-RETURN s.Name as Study_Name, Person_Task_Sum, deliveries, Total_Study_Task_Num, 100 * Person_Task_Sum / Total_Study_Task_Num AS Percent_Study_Task
+MATCH (p:Person {Name: '{{person:Person name}}'})-[wo:WORKS_ON]->(d:Delivery)<-[:HAS_DELIVERY]-(s:Study)
+WHERE d.Actual_Delivery_Date >= date('{{startDate:Start date}}')
+  AND d.Actual_Delivery_Date <= date('{{endDate:End date}}')
+WITH s,
+     collect(DISTINCT d.Name) AS deliveries,
+     sum(coalesce(toFloat(wo.CSR_Task_Num_Total), 0.0) + coalesce(toFloat(wo.SDA_Task_Num_Total), 0.0) + coalesce(toFloat(wo.STD_Task_Num_Total), 0.0) + coalesce(toFloat(wo.esub_Data_Num_Total), 0.0)) AS Person_Task_Sum
+MATCH (s)-[:HAS_DELIVERY]->(allD:Delivery)
+WITH s, deliveries, Person_Task_Sum,
+     sum(coalesce(toFloat(allD.CSR_Task_Num), 0.0) + coalesce(toFloat(allD.SDA_Task_Num), 0.0) + coalesce(toFloat(allD.STD_Task_Num), 0.0) + coalesce(toFloat(allD.esub_Task_Data_Num), 0.0)) AS Total_Study_Task_Num
+RETURN s.Name AS Study_Name,
+       Person_Task_Sum,
+       deliveries,
+       Total_Study_Task_Num,
+       CASE WHEN Total_Study_Task_Num = 0 THEN null ELSE round(100.0 * Person_Task_Sum / Total_Study_Task_Num, 2) END AS Percent_Study_Task
 ORDER BY Study_Name
 ```
 
@@ -72,10 +82,10 @@ Summarize the total number of TLFs completed in the past year.
 **Cypher**
 
 ```cypher
-WITH date() - duration({years: {{years: number of year}}}) AS Last_Year_Date
-MATCH (p:Person {Name: {{person:Name of the person}}})-[wo:WORKS_ON] -> (d:Delivery)
-where d.Actual_Delivery_Date >= Last_Year_Date
-RETURN SUM(wo.TLF_Num_Total) AS Total_TLFs
+WITH date() - duration({years: {{years:Number of years}}}) AS Last_Year_Date
+MATCH (p:Person {Name: '{{person:Person name}}'})-[wo:WORKS_ON]->(d:Delivery)
+WHERE d.Actual_Delivery_Date >= Last_Year_Date AND d.Actual_Delivery_Date <= date()
+RETURN SUM(coalesce(toFloat(wo.CSR_TLF_Num_Total), 0.0)) AS Total_TLFs
 ```
 
 ## q005: How many datasets or tables are associated with each DID, and how many hours were spent on each DID?
@@ -114,16 +124,10 @@ Lists all the studies and domains the person has participated in.
 **Cypher**
 
 ```cypher
-MATCH (p: Person {Name:{{person:Name of the person}}})-[:WORKS_ON]->(d:Delivery)<-[:HAS_DELIVERY]-(s:Study)
-MATCH (d)-[rel:HAS_SDTM {Generation:p.Name}]->(sdtm:SDTM)
-WITH s, 'GEN' AS Role, sdtm.Name AS Domain
-RETURN DISTINCT(s.Name) AS Study_Name, Role, Domain
-UNION
-MATCH (p: Person {Name:{{person:Name of the person}}})-[:WORKS_ON]->(d:Delivery)<-[:HAS_DELIVERY]-(s:Study)
-MATCH (d)-[rel:HAS_SDTM {QC:p.Name}]->(sdtm:SDTM)
-WITH s, 'QC' AS Role, sdtm.Name AS Domain
-RETURN DISTINCT(s.Name) AS Study_Name, Role, Domain
-ORDER BY Study_Name, Role, Domain
+MATCH (p:Person {Name: '{{person:Person name}}'})-[:WORKS_ON]->(d:Delivery)<-[:HAS_DELIVERY]-(s:Study)
+MATCH (d)-[:HAS_SDTM]->(sdtm:SDTM)
+RETURN DISTINCT s.Name AS Study_Name, sdtm.Name AS Domain
+ORDER BY Study_Name, Domain
 ```
 
 ## q007: Which domains have I worked on in the past period, how many times, and which ones were the most and least frequent?
@@ -144,15 +148,20 @@ Summarizes the number of times each domain was worked on, and identifies the mos
 **Cypher**
 
 ```cypher
-MATCH (p:Person {Name: {{person:Name of the person}}})-[:WORKS_ON]->(d:Delivery)
-WHERE d.Actual_Delivery_Date >= date({{startDate}}) AND d.Actual_Delivery_Date <= date({{endDate}})
-MATCH (d)-[rel:HAS_SDTM]->(sdtm:SDTM)
-WHERE p.Name in [rel.Generation, rel.QC]
-WITH sdtm.Name AS Domain, COUNT(sdtm.Name) AS CNT_SDTM
-WITH collect({Domain:Domain, CNT_SDTM:CNT_SDTM}) AS rows, MAX(CNT_SDTM) AS Max_CNT_SDTM, MIN(CNT_SDTM) AS Min_CNT_SDTM
+MATCH (p:Person {Name: '{{person:Person name}}'})-[:WORKS_ON]->(d:Delivery)
+WHERE d.Actual_Delivery_Date >= date('{{startDate:Start date}}')
+  AND d.Actual_Delivery_Date <= date('{{endDate:End date}}')
+MATCH (d)-[:HAS_SDTM]->(sdtm:SDTM)
+WITH sdtm.Name AS Domain, COUNT(DISTINCT d) AS Domain_Count
+WITH COLLECT({Domain: Domain, Domain_Count: Domain_Count}) AS rows,
+     MAX(Domain_Count) AS Max_Domain_Count,
+     MIN(Domain_Count) AS Min_Domain_Count
 UNWIND rows AS row
-WITH row.Domain AS Domain, row.CNT_SDTM AS CNT_SDTM, Max_CNT_SDTM, Min_CNT_SDTM
-RETURN Domain, CNT_SDTM,CASE WHEN CNT_SDTM = Max_CNT_SDTM THEN 'Y' ELSE '' END AS Max_Domain,CASE WHEN CNT_SDTM = Min_CNT_SDTM THEN 'Y' ELSE '' END AS Min_Domain
+RETURN row.Domain AS Domain,
+       row.Domain_Count AS Domain_Count,
+       CASE WHEN row.Domain_Count = Max_Domain_Count THEN 'Y' ELSE '' END AS Most_Frequent,
+       CASE WHEN row.Domain_Count = Min_Domain_Count THEN 'Y' ELSE '' END AS Least_Frequent
+ORDER BY Domain_Count DESC, Domain
 ```
 
 ## q008: Which studies have I participated in, sorted by TA and domain?
@@ -171,20 +180,11 @@ Lists all the studies the person has participated in, sorted by TA and domain.
 **Cypher**
 
 ```cypher
-MATCH (p: Person {Name:{{person:Name of the person}}})-[:WORKS_ON]->(d:Delivery)<-[:HAS_DELIVERY]-(s:Study)
-MATCH (s)-[:HAS_DETAIL]->(info:Study_Info)
-WITH p, s, d, info.TA as TA
-MATCH (d)-[rel:HAS_SDTM {Generation:p.Name}]->(sdtm:SDTM)
-WITH DISTINCT(s.Name) AS Study_Name, TA, 'GEN' AS Role, sdtm.Name AS Domain
-RETURN TA, Domain, Role, Study_Name
-UNION
-MATCH (p: Person {Name:{{person:Name of the person}}})-[:WORKS_ON]->(d:Delivery)<-[:HAS_DELIVERY]-(s:Study)
-MATCH (s)-[:HAS_DETAIL]->(info:Study_Info)
-WITH p, s, d, info.TA as TA
-MATCH (d)-[rel:HAS_SDTM {QC:p.Name}]->(sdtm:SDTM)
-WITH DISTINCT(s.Name) AS Study_Name, TA, 'QC' AS Role, sdtm.Name AS Domain
-RETURN TA, Domain, Role, Study_Name
-ORDER BY TA, Domain, Role, Study_Name
+MATCH (p:Person {Name: '{{person:Person name}}'})-[:WORKS_ON]->(d:Delivery)<-[:HAS_DELIVERY]-(s:Study)
+OPTIONAL MATCH (s)-[:HAS_DETAIL]->(info:Study_Info)
+MATCH (d)-[:HAS_SDTM]->(sdtm:SDTM)
+RETURN DISTINCT COALESCE(info.TA, 'Unknown') AS TA, sdtm.Name AS Domain, s.Name AS Study_Name
+ORDER BY TA, Domain, Study_Name
 ```
 
 ## q009: How many hours did I work on study XXXX in the past two weeks?
@@ -228,12 +228,14 @@ Summarizes the delivery efficiency (number of deliveries and average tasks) in t
 **Cypher**
 
 ```cypher
-WITH date()-duration({weeks: {{weeks: number of weeks}}}) AS Date_Past_Two_Weeks
-MATCH (p:Person {Name:{{person:Name of the person}}})-[to:TIME_ON]->(didn:DIDN_Month)-[:BELONGS_TO]->(d:Delivery)<-[wo:WORKS_ON]-(p)
-WHERE d.Actual_Delivery_Date >= Date_Past_Two_Weeks
-WITH SUM(to.Hour) AS Total_Hour, SUM(wo.Task_Num_Total) AS Total_Task
-WITH Total_Hour/Total_Task AS Hour_Per_Task
-RETURN Hour_Per_Task
+WITH date() - duration({weeks: {{weeks:Number of weeks}}}) AS Date_Past_Two_Weeks
+MATCH (p:Person {Name: '{{person:Person name}}'})-[to:TIME_ON]->(didn:DIDN_Month)-[:BELONGS_TO]->(d:Delivery)<-[wo:WORKS_ON]-(p)
+WHERE d.Actual_Delivery_Date >= Date_Past_Two_Weeks AND d.Actual_Delivery_Date <= date()
+WITH SUM(to.Hour) AS Total_Hour,
+     SUM(COALESCE(toFloat(wo.CSR_Task_Num_Total), 0.0) + COALESCE(toFloat(wo.SDA_Task_Num_Total), 0.0) + COALESCE(toFloat(wo.STD_Task_Num_Total), 0.0) + COALESCE(toFloat(wo.esub_Data_Num_Total), 0.0)) AS Total_Task
+RETURN Total_Hour,
+       Total_Task,
+       CASE WHEN Total_Task = 0 THEN null ELSE round(Total_Hour / Total_Task, 2) END AS Hour_Per_Task
 ```
 
 ## q011: How much time does it take to complete one task based on the tasks I worked on in the past six months?
@@ -253,12 +255,14 @@ Estimates the time taken to complete one task based on recent tasks worked on.
 **Cypher**
 
 ```cypher
-WITH date()-duration({months: {{months: number of months}}}) AS Date_Past_Six_Month
-MATCH (p:Person {Name:{{person:Name of the person}}})-[to:TIME_ON]->(didn:DIDN_Month)-[:BELONGS_TO]->(d:Delivery)<-[wo:WORKS_ON]-(p)
-WHERE d.Actual_Delivery_Date >= Date_Past_Six_Month
-WITH SUM(to.Hour) AS Total_Hour, SUM(wo.Task_Num_Total) AS Total_Task
-WITH Total_Hour/Total_Task AS Hour_Per_Task
-RETURN Hour_Per_Task
+WITH date() - duration({months: {{months:Number of months}}}) AS Date_Past_Six_Months
+MATCH (p:Person {Name: '{{person:Person name}}'})-[to:TIME_ON]->(didn:DIDN_Month)-[:BELONGS_TO]->(d:Delivery)<-[wo:WORKS_ON]-(p)
+WHERE d.Actual_Delivery_Date >= Date_Past_Six_Months AND d.Actual_Delivery_Date <= date()
+WITH SUM(COALESCE(toFloat(to.Hour), 0.0)) AS Total_Hour,
+     SUM(COALESCE(toFloat(wo.CSR_Task_Num_Total), 0.0) + COALESCE(toFloat(wo.SDA_Task_Num_Total), 0.0) + COALESCE(toFloat(wo.STD_Task_Num_Total), 0.0) + COALESCE(toFloat(wo.esub_Data_Num_Total), 0.0)) AS Total_Task
+RETURN Total_Hour,
+       Total_Task,
+       CASE WHEN Total_Task = 0 THEN null ELSE round(Total_Hour / Total_Task, 2) END AS Hour_Per_Task
 ```
 
 ## q012: Please analyze the status of DIDs over the past 6 months and time spent on each
@@ -345,20 +349,29 @@ Summarizes the goals for direct report(s) in terms of total studies, TLFs, and t
 
 ```json
 {
-"Semester": 1,
-		  "person": "Chen, Sizhen",
+  "manager": "Chen, Sizhen",
+  "semester": 1,
+  "year": 2025
 }
 ```
 
 **Cypher**
 
 ```cypher
-WITH {{Semester: Semester of PLI}} AS Semester
-MATCH (p:Person {Name:{{person:Name of the person}}})-[wo:WORKS_ON]->(d:Delivery)
-WHERE d.Actual_Delivery_Date.Month>=(Semester-1)*6 and d.Actual_Delivery_Date.Month<=Semester*6 AND d.Actual_Delivery_Date.Year=date().Year
-WITH d.Actual_Delivery_Date as Actual_Delivery_Date, d.Name as Delivery
-RETURN Actual_Delivery_Date, Delivery
-ORDER BY Actual_Delivery_Date
+WITH {{semester:Semester number}} AS Semester, {{year:Target year}} AS Target_Year
+MATCH (employee:Person)-[:REPORTS_TO]->(manager:Person {Name: '{{manager:Manager name}}'})
+MATCH (employee)-[wo:WORKS_ON]->(d:Delivery)
+OPTIONAL MATCH (d)<-[:HAS_DELIVERY]-(s:Study)
+WITH employee, wo, s, Semester, Target_Year, date(d.Actual_Delivery_Date) AS Delivery_Date
+WHERE Delivery_Date.year = Target_Year
+  AND ((Semester = 1 AND Delivery_Date.month >= 1 AND Delivery_Date.month <= 6)
+    OR (Semester = 2 AND Delivery_Date.month >= 7 AND Delivery_Date.month <= 12))
+WITH employee,
+     COUNT(DISTINCT s) AS Total_Studies,
+     SUM(COALESCE(toFloat(wo.CSR_TLF_Num_Total), 0.0)) AS Total_TLFs,
+     SUM(COALESCE(toFloat(wo.CSR_Task_Num_Total), 0.0) + COALESCE(toFloat(wo.SDA_Task_Num_Total), 0.0) + COALESCE(toFloat(wo.STD_Task_Num_Total), 0.0) + COALESCE(toFloat(wo.esub_Data_Num_Total), 0.0)) AS Total_Tasks
+RETURN employee.Name AS Direct_Report, Total_Studies, Total_TLFs, Total_Tasks
+ORDER BY Direct_Report
 ```
 
 ## q117: recommend new studies or domains for a person based on their past experience.
@@ -379,14 +392,16 @@ Auto-parameterized query for question.
 ```cypher
 MATCH (p:Person {Name: {personName}})-[:WORKS_ON]->(d:Delivery)<-[:HAS_DELIVERY]-(s:Study)
 OPTIONAL MATCH (s)-[:HAS_DETAIL]->(info:Study_Info)
-OPTIONAL MATCH (d)-[r:HAS_ADAM|HAS_SDTM]->(n)
-WHERE (r.Generation CONTAINS p.Name OR r.QC CONTAINS p.Name)
-RETURN 
+OPTIONAL MATCH (d)-[r1:HAS_SDTM]->(sdtm:SDTM)
+WHERE r1.Generation CONTAINS p.Name OR r1.QC CONTAINS p.Name
+OPTIONAL MATCH (d)-[r2:HAS_ADAM]->(adam:ADaM)
+WHERE r2.Generation CONTAINS p.Name OR r2.QC CONTAINS p.Name
+RETURN
 p.Name AS Person_Name,
 s.Name AS Study_Names,
 COLLECT(DISTINCT info.Program_Code) AS Program_Codes,
 COLLECT(DISTINCT info.Study_Type) AS Study_Types,
-COLLECT(DISTINCT n.Name) AS Related_Domains
+COLLECT(DISTINCT sdtm.Name) + COLLECT(DISTINCT adam.Name) AS Related_Domains
 ```
 
 ## q118: recommend new studies or domains for a person based on their past skills.
@@ -407,14 +422,16 @@ Auto-parameterized query for question.
 ```cypher
 MATCH (p:Person {Name: {personName}})-[:WORKS_ON]->(d:Delivery)<-[:HAS_DELIVERY]-(s:Study)
 OPTIONAL MATCH (s)-[:HAS_DETAIL]->(info:Study_Info)
-OPTIONAL MATCH (d)-[r:HAS_ADAM|HAS_SDTM]->(n)
-WHERE (r.Generation CONTAINS p.Name OR r.QC CONTAINS p.Name)
-RETURN 
+OPTIONAL MATCH (d)-[r1:HAS_SDTM]->(sdtm:SDTM)
+WHERE r1.Generation CONTAINS p.Name OR r1.QC CONTAINS p.Name
+OPTIONAL MATCH (d)-[r2:HAS_ADAM]->(adam:ADaM)
+WHERE r2.Generation CONTAINS p.Name OR r2.QC CONTAINS p.Name
+RETURN
 p.Name AS Person_Name,
 s.Name AS Study_Names,
 COLLECT(DISTINCT info.Program_Code) AS Program_Codes,
 COLLECT(DISTINCT info.Study_Type) AS Study_Types,
-COLLECT(DISTINCT n.Name) AS Related_Domains
+COLLECT(DISTINCT sdtm.Name) + COLLECT(DISTINCT adam.Name) AS Related_Domains
 ```
 
 ## q125: Summarize someone's expertise in TA and Domain.
@@ -435,14 +452,16 @@ Auto-parameterized query for question.
 ```cypher
 MATCH (p:Person {Name: {personName}})-[:WORKS_ON]->(d:Delivery)<-[:HAS_DELIVERY]-(s:Study)
 OPTIONAL MATCH (s)-[:HAS_DETAIL]->(info:Study_Info)
-OPTIONAL MATCH (d)-[r:HAS_ADAM|HAS_SDTM]->(n)
-WHERE (r.Generation CONTAINS p.Name OR r.QC CONTAINS p.Name)
-RETURN 
+OPTIONAL MATCH (d)-[r1:HAS_SDTM]->(sdtm:SDTM)
+WHERE r1.Generation CONTAINS p.Name OR r1.QC CONTAINS p.Name
+OPTIONAL MATCH (d)-[r2:HAS_ADAM]->(adam:ADaM)
+WHERE r2.Generation CONTAINS p.Name OR r2.QC CONTAINS p.Name
+RETURN
 p.Name AS Person_Name,
 s.Name AS Study_Names,
 COLLECT(DISTINCT info.Program_Code) AS Program_Codes,
 COLLECT(DISTINCT info.Study_Type) AS Study_Types,
-COLLECT(DISTINCT n.Name) AS Related_Domains
+COLLECT(DISTINCT sdtm.Name) + COLLECT(DISTINCT adam.Name) AS Related_Domains
 ```
 
 ## q134: list domains a person has involved
@@ -463,12 +482,14 @@ Auto-parameterized query for question.
 ```cypher
 MATCH (p:Person {Name: {personName}})-[:WORKS_ON]->(d:Delivery)<-[:HAS_DELIVERY]-(s:Study)
 OPTIONAL MATCH (s)-[:HAS_DETAIL]->(info:Study_Info)
-OPTIONAL MATCH (d)-[r:HAS_ADAM|HAS_SDTM]->(n)
-WHERE (r.Generation CONTAINS p.Name OR r.QC CONTAINS p.Name)
-RETURN 
+OPTIONAL MATCH (d)-[r1:HAS_SDTM]->(sdtm:SDTM)
+WHERE r1.Generation CONTAINS p.Name OR r1.QC CONTAINS p.Name
+OPTIONAL MATCH (d)-[r2:HAS_ADAM]->(adam:ADaM)
+WHERE r2.Generation CONTAINS p.Name OR r2.QC CONTAINS p.Name
+RETURN
 p.Name AS Person_Name,
 s.Name AS Study_Names,
 COLLECT(DISTINCT info.Program_Code) AS Program_Codes,
 COLLECT(DISTINCT info.Study_Type) AS Study_Types,
-COLLECT(DISTINCT n.Name) AS Related_Domains
+COLLECT(DISTINCT sdtm.Name) + COLLECT(DISTINCT adam.Name) AS Related_Domains
 ```

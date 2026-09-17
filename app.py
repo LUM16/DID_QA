@@ -135,6 +135,8 @@ st.markdown(
         background: #24483e !important;
         border-color: #24483e !important;
       }
+      .fb-hint { color: #4a635c; font-size: 0.82rem; margin: 0.35rem 0 0.2rem; }
+      .hist-btn button { text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -151,6 +153,8 @@ def ensure_state() -> None:
         st.session_state.show_cypher = True
     if "token_usage" not in st.session_state:
         st.session_state.token_usage = empty_usage()
+    if "query_history" not in st.session_state:
+        st.session_state.query_history = []
 
 
 def history_for_ask() -> list[dict]:
@@ -164,11 +168,13 @@ def history_for_ask() -> list[dict]:
 
 
 def render_visualization(visualization: dict | None) -> None:
-    """Render legacy chart payloads and validated post-query chart payloads."""
+    """Render Streamlit-native charts for stacked/grouped/series payloads."""
     if not visualization or not visualization.get("data"):
         return
-    st.caption(visualization.get("title", ""))
     chart_type = visualization.get("chart_type")
+    if chart_type == "pie":
+        return
+    st.caption(visualization.get("title", ""))
     if chart_type == "monthly_hours_chart":
         st.bar_chart(visualization["data"], x="month", y="hours")
     elif chart_type == "did_effort_distribution_chart":
@@ -198,25 +204,204 @@ def render_visualization(visualization: dict | None) -> None:
             st.info("The returned chart fields could not be rendered; see the table below.")
 
 
-def render_result_presentation(presentation: dict | None) -> None:
-    """Render the optional chart and its always-safe table fallback."""
-    if not presentation:
+def _table_for_message(msg: dict) -> dict | None:
+    visualization = msg.get("visualization") or {}
+    table = (visualization.get("table") if visualization else None) or msg.get("table")
+    if table and table.get("columns"):
+        return table
+    rows = msg.get("rows") or []
+    if not rows:
+        return None
+    from result_presentation import table_from_rows
+
+    columns = msg.get("columns")
+    return table_from_rows(rows, columns if columns else None)
+
+
+def _question_for_message(msg: dict, idx: int | None = None) -> str:
+    if msg.get("question"):
+        return str(msg["question"])
+    if idx is None:
+        return ""
+    messages = st.session_state.messages
+    if idx > 0 and messages[idx - 1].get("role") == "user":
+        return str(messages[idx - 1].get("content") or "")
+    return ""
+
+
+def render_result_views(msg: dict, key_prefix: str) -> None:
+    """Insight2-style tabs: org / graph / labeled chart / table + CSV/JSON download."""
+    import streamlit.components.v1 as components
+
+    import export
+    from ui_results import (
+        build_org_html,
+        chart_component_height,
+        chart_html,
+        chart_payload,
+        graph_html,
+        is_org_graph,
+        org_component_height,
+        org_from_rows,
+    )
+
+    visualization = msg.get("visualization")
+    table = _table_for_message(msg)
+    rows = (table or {}).get("rows") or msg.get("rows") or []
+    columns = (table or {}).get("columns") or msg.get("columns") or []
+    graph = msg.get("graph") or {}
+    org = None
+    if is_org_graph(graph):
+        org = graph
+    else:
+        org = org_from_rows(rows, columns)
+        if org:
+            graph = org
+
+    canvas = chart_payload(visualization) if visualization else None
+    has_native_chart = bool(
+        visualization
+        and visualization.get("data")
+        and visualization.get("chart_type") in {"bar", "line", "monthly_hours_chart", "did_effort_distribution_chart"}
+        and canvas is None
+    )
+    has_graph = bool(graph.get("edge_count") and not graph.get("synthetic"))
+
+    panes: list[tuple[str, str]] = []
+    if org:
+        panes.append(("org", "🏢 Org Chart"))
+    if has_graph:
+        panes.append(("graph", f"🕸 Graph ({graph.get('node_count', 0)}/{graph.get('edge_count', 0)})"))
+    if canvas or has_native_chart:
+        panes.append(("chart", "Chart"))
+    if table and table.get("columns"):
+        panes.append(("table", "Table"))
+    if not panes:
         return
-    render_visualization(presentation)
-    table = presentation.get("table") or {}
-    if table.get("columns"):
-        st.dataframe(table["rows"], use_container_width=True, hide_index=True)
-    if presentation.get("data_note"):
-        st.caption(presentation["data_note"])
+
+    tabs = st.tabs([label for _, label in panes])
+    for tab, (kind, _) in zip(tabs, panes):
+        with tab:
+            if kind == "org" and org:
+                components.html(
+                    build_org_html(org), height=org_component_height(org), scrolling=True
+                )
+            elif kind == "graph":
+                components.html(graph_html(graph), height=540, scrolling=True)
+            elif kind == "chart":
+                if canvas:
+                    chart_kind, labels, values = canvas
+                    components.html(
+                        chart_html(
+                            chart_kind,
+                            labels,
+                            values,
+                            (visualization or {}).get("title") or "",
+                        ),
+                        height=chart_component_height(chart_kind, len(labels)),
+                        scrolling=False,
+                    )
+                else:
+                    render_visualization(visualization)
+            elif kind == "table":
+                st.dataframe(table["rows"], use_container_width=True, hide_index=True)
+
+    if visualization and visualization.get("data_note"):
+        st.caption(visualization["data_note"])
+
+    if table and table.get("columns"):
+        csv_data = export.to_csv(table["rows"], table["columns"])
+        json_data = export.to_json(table["rows"], table["columns"])
+        left, right = st.columns(2)
+        with left:
+            st.download_button(
+                "Download CSV",
+                data=csv_data.encode("utf-8-sig"),
+                file_name="did_result.csv",
+                mime="text/csv",
+                key=f"{key_prefix}_csv",
+                use_container_width=True,
+            )
+        with right:
+            st.download_button(
+                "Download JSON",
+                data=json_data.encode("utf-8"),
+                file_name="did_result.json",
+                mime="application/json",
+                key=f"{key_prefix}_json",
+                use_container_width=True,
+            )
 
 
-def render_message(msg: dict) -> None:
+def render_feedback(msg: dict, key_prefix: str, idx: int | None = None) -> None:
+    from example_memory import dump_positive_json, get_memory
+
+    vote = int(msg.get("feedback") or 0)
+    st.markdown(
+        '<div class="fb-hint">Was this helpful? 👍 saves this Q+Cypher as a positive example.</div>',
+        unsafe_allow_html=True,
+    )
+    up, down, _ = st.columns([1.1, 1.6, 3.3])
+    question = _question_for_message(msg, idx)
+    cypher = msg.get("cypher") or ""
+    with up:
+        if st.button("👍 Yes", key=f"{key_prefix}_up", disabled=vote > 0, use_container_width=True):
+            try:
+                case_id = get_memory().endorse(
+                    question,
+                    cypher,
+                    row_count=len(msg.get("rows") or []),
+                    case_id=msg.get("case_id"),
+                )
+                dump_positive_json()
+                target = _message_by_prefix(key_prefix, idx)
+                if target is not None:
+                    target["feedback"] = 1
+                    if case_id:
+                        target["case_id"] = case_id
+                st.toast("Saved 👍 — kept as a positive training example")
+            except Exception as exc:  # noqa: BLE001
+                st.error(f"Could not save positive example: {exc}")
+            st.rerun()
+    with down:
+        if st.button("👎 No", key=f"{key_prefix}_down", disabled=vote < 0, use_container_width=True):
+            try:
+                get_memory().reject(msg.get("case_id"), question, cypher)
+                target = _message_by_prefix(key_prefix, idx)
+                if target is not None:
+                    target["feedback"] = -1
+                st.toast("Saved 👎 — this case will not be used as a positive example")
+            except Exception as exc:  # noqa: BLE001
+                st.error(f"Could not save feedback: {exc}")
+            st.rerun()
+
+
+def _message_by_prefix(key_prefix: str, idx: int | None) -> dict | None:
+    if idx is not None and 0 <= idx < len(st.session_state.messages):
+        return st.session_state.messages[idx]
+    if key_prefix.startswith("msg_"):
+        try:
+            index = int(key_prefix.split("_", 1)[1])
+            return st.session_state.messages[index]
+        except (IndexError, ValueError):
+            return None
+    return None
+
+
+def render_result_presentation(presentation: dict | None) -> None:
+    """Back-compat wrapper used by older message payloads."""
+    render_result_views({"visualization": presentation, "rows": (presentation or {}).get("data")}, "legacy")
+
+
+def render_message(msg: dict, idx: int) -> None:
     with st.chat_message(msg["role"]):
-        st.markdown(msg["content"])
-        if msg.get("visualization") and msg["role"] == "assistant":
-            render_result_presentation(msg["visualization"])
-        if msg.get("presentation_warning") and msg["role"] == "assistant":
-            st.caption(msg["presentation_warning"])
+        if msg.get("content"):
+            st.markdown(msg["content"])
+        if msg["role"] == "assistant":
+            render_result_views(msg, f"msg_{idx}")
+            if msg.get("presentation_warning"):
+                st.caption(msg["presentation_warning"])
+            render_feedback(msg, f"msg_{idx}", idx)
         if msg.get("cypher") and st.session_state.show_cypher and msg["role"] == "assistant":
             st.markdown(f'<div class="cypher-box">{msg["cypher"]}</div>', unsafe_allow_html=True)
         if msg.get("usage") and msg["role"] == "assistant":
@@ -228,6 +413,8 @@ def render_message(msg: dict) -> None:
 
 
 def enqueue_prompt(prompt: str) -> None:
+    history = [item for item in st.session_state.query_history if item != prompt]
+    st.session_state.query_history = [prompt, *history][:60]
     st.session_state.messages.append({"role": "user", "content": prompt})
     st.rerun()
 
@@ -251,10 +438,35 @@ def complete_pending_turn() -> None:
                 cypher = result.get("cypher") or ""
                 usage = result.get("usage") or empty_usage()
                 st.session_state.token_usage = add_usage(st.session_state.token_usage, usage)
-                st.markdown(answer)
-                render_result_presentation(result.get("visualization"))
+                assistant_idx = len(st.session_state.messages)
+                key_prefix = f"msg_{assistant_idx}"
+                if answer:
+                    st.markdown(answer)
+                render_result_views(
+                    {
+                        "visualization": result.get("visualization"),
+                        "table": result.get("table"),
+                        "rows": result.get("rows") or [],
+                        "columns": result.get("columns") or [],
+                        "graph": result.get("graph") or {},
+                        "cypher": cypher,
+                        "question": prompt,
+                        "case_id": result.get("case_id"),
+                    },
+                    key_prefix,
+                )
                 if result.get("presentation_warning"):
                     st.caption(result["presentation_warning"])
+                render_feedback(
+                    {
+                        "question": prompt,
+                        "cypher": cypher,
+                        "rows": result.get("rows") or [],
+                        "case_id": result.get("case_id"),
+                    },
+                    key_prefix,
+                    idx=assistant_idx,
+                )
                 if cypher and st.session_state.show_cypher:
                     st.markdown(f'<div class="cypher-box">{cypher}</div>', unsafe_allow_html=True)
                 st.caption(
@@ -265,10 +477,16 @@ def complete_pending_turn() -> None:
                     {
                         "role": "assistant",
                         "content": answer,
+                        "question": prompt,
                         "cypher": cypher,
                         "usage": usage,
                         "prediction": result.get("prediction"),
                         "visualization": result.get("visualization"),
+                        "table": result.get("table"),
+                        "rows": result.get("rows") or [],
+                        "columns": result.get("columns") or [],
+                        "graph": result.get("graph") or {},
+                        "case_id": result.get("case_id"),
                         "presentation_warning": result.get("presentation_warning"),
                     }
                 )
@@ -600,6 +818,31 @@ with st.sidebar:
     )
     st.caption("Normal Q&A usually uses 3 LLM calls (Cypher + answer + presentation).")
 
+    st.divider()
+    st.subheader("Query history")
+    if st.session_state.query_history:
+        if st.button("Clear history", use_container_width=True):
+            st.session_state.query_history = []
+            st.rerun()
+        for i, item in enumerate(st.session_state.query_history[:20]):
+            label = item if len(item) <= 42 else item[:39] + "…"
+            if st.button(label, key=f"hist_{i}", use_container_width=True, help=item):
+                enqueue_prompt(item)
+    else:
+        st.caption("No queries yet.")
+
+    st.subheader("Example library")
+    try:
+        from example_memory import get_memory
+
+        stats = get_memory().stats()
+        st.caption(
+            f"👍 {stats.get('thumbs_up', 0)} positive examples · "
+            f"👎 {stats.get('thumbs_down', 0)} excluded"
+        )
+    except Exception:  # noqa: BLE001
+        st.caption("Example library unavailable.")
+
 chat_tab, team_tab, allocation_tab = st.tabs(
     ["Ask Neo4j", "Recommend DU Team", "Allocate TLF People"]
 )
@@ -636,8 +879,8 @@ with chat_tab:
     else:
         st.markdown(f'<div class="brand-compact">{APP_NAME}</div>', unsafe_allow_html=True)
         st.caption(APP_TAGLINE)
-        for msg in st.session_state.messages:
-            render_message(msg)
+        for i, msg in enumerate(st.session_state.messages):
+            render_message(msg, i)
         complete_pending_turn()
         follow_up = st.chat_input("Ask a follow-up…")
         if follow_up:
