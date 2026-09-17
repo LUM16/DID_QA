@@ -282,12 +282,12 @@ def render_team_recommendation() -> None:
     """Render the upload-driven, read-only DU team scope-match workflow."""
     st.subheader("Recommend DU Team")
     st.caption(
-        "Upload a new Delivery scope. Recommendations use completed Neo4j history, "
-        "current Team Lead membership, and the shared TLF similarity cache."
+        "Enter a Group Lead, then upload a new Delivery's TLF scope. Recommendations "
+        "rank only DU teams currently under that Group Lead."
     )
     st.info(
-        "Accepted input: one Excel workbook with sheets named TLF and Data, or a "
-        "TLF CSV plus a Data CSV. The uploaded scope is not written to Neo4j."
+        "Accepted input: an Excel workbook with a TLF sheet, or a TLF CSV. "
+        "Recommendations use TLF experience and current active-DID workload only."
     )
     st.markdown("**Example input — `C5001001_61.xlsx`**")
     st.caption(
@@ -305,31 +305,31 @@ def render_team_recommendation() -> None:
     else:
         st.warning("The bundled DU recommendation example input is unavailable.")
     primary_file = st.file_uploader(
-        "Delivery scope workbook or TLF CSV",
+        "Delivery TLF workbook or CSV",
         type=["xlsx", "csv"],
         key="du_scope_primary",
     )
-    data_csv_file = None
-    if primary_file and primary_file.name.lower().endswith(".csv"):
-        data_csv_file = st.file_uploader(
-            "Data CSV",
-            type=["csv"],
-            key="du_scope_data",
-        )
+    group_lead_input = st.text_input(
+        "Group Lead name",
+        placeholder="For example: Maggie",
+        key="du_scope_group_lead",
+    )
     if not primary_file:
         return
     upload_key = (
+        group_lead_input.strip(),
         primary_file.name,
         len(primary_file.getvalue()),
-        data_csv_file.name if data_csv_file else "",
-        len(data_csv_file.getvalue()) if data_csv_file else 0,
     )
     if st.button("Recommend DU teams", type="primary", use_container_width=True):
+        if not group_lead_input.strip():
+            st.error("Enter a Group Lead name, for example Maggie.")
+            return
         try:
             from du_team_recommendation import recommend_uploaded_scope
 
             with st.spinner("Reading scope and comparing completed DU experience..."):
-                result = recommend_uploaded_scope(primary_file, data_csv_file)
+                result = recommend_uploaded_scope(group_lead_input, primary_file)
             st.session_state.du_team_recommendation = result
             st.session_state.du_team_recommendation_input = upload_key
         except (RuntimeError, ValueError) as exc:
@@ -343,14 +343,14 @@ def render_team_recommendation() -> None:
     if not result or st.session_state.get("du_team_recommendation_input") != upload_key:
         return
     counts = result["target_counts"]
-    left, middle, right = st.columns(3)
-    left.metric("Target TLFs", counts["tlfs"])
-    middle.metric("Target ADaM", counts["adams"])
-    right.metric("Target SDTM", counts["sdtms"])
+    st.metric("Target TLFs", counts["tlfs"])
     snapshot = result["history_snapshot"]
     st.caption(
         f"DU history snapshot: {snapshot['generated_at']} · "
         f"{snapshot['history_row_count']:,} completed DU-DID rows."
+    )
+    st.success(
+        f"Showing DU teams currently under Group Lead: {result['group_lead_name']}"
     )
 
     recommendations = result["recommendations"]
@@ -378,8 +378,6 @@ def render_team_recommendation() -> None:
             [
                 {
                     "TLF semantic coverage": f"{row['tlf_semantic_coverage']:.1%}",
-                    "ADaM coverage": f"{row['adam_coverage']:.1%}",
-                    "SDTM coverage": f"{row['sdtm_coverage']:.1%}",
                     "Similar DID >= 70%": row["similar_did_count_ge_70"],
                     "Similar DID >= 85%": row["similar_did_count_ge_85"],
                     "Completed DIDs": row["completed_did_count"],
@@ -390,19 +388,6 @@ def render_team_recommendation() -> None:
             use_container_width=True,
             hide_index=True,
         )
-        gaps = []
-        if row["missing_adams"]:
-            gaps.append(f"Missing ADaM: {', '.join(row['missing_adams'])}")
-        if row["missing_sdtms"]:
-            gaps.append(f"Missing SDTM: {', '.join(row['missing_sdtms'])}")
-        if row["missing_exact_tlfs"]:
-            gaps.append(
-                f"No exact historical TLF title match: {len(row['missing_exact_tlfs'])}"
-            )
-        if gaps:
-            st.warning(" | ".join(gaps))
-        else:
-            st.success("No exact ADaM or SDTM coverage gaps were found.")
         with st.expander("TLF coverage evidence across completed DIDs"):
             st.dataframe(
                 [

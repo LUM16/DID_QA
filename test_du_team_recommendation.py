@@ -13,9 +13,11 @@ from du_team_recommendation import (
     _resolve_history_snapshot_path,
     _resolve_recommendation_cache_path,
     _scope_from_rows,
+    group_lead_candidates,
     load_history_snapshot,
     recommend_teams,
     refresh_history_snapshot,
+    resolve_group_lead_name,
 )
 
 
@@ -89,6 +91,14 @@ class TeamRecommendationTests(unittest.TestCase):
         self.assertEqual({item["name"] for item in scope["adams"]}, {"ADAE", "ADSL"})
         self.assertEqual(scope["sdtms"][0]["name"], "AE")
 
+    def test_group_lead_resolver_accepts_unique_name_token(self) -> None:
+        candidates = group_lead_candidates(
+            [{"group_leads": ["Zhang, Maggie", "Lee, Robin"]}]
+        )
+        self.assertEqual(resolve_group_lead_name("Maggie", candidates), "Zhang, Maggie")
+        with self.assertRaisesRegex(ValueError, "uniquely match"):
+            resolve_group_lead_name("Unknown", candidates)
+
     def test_recommendation_prefers_scope_coverage_and_reuses_cache(self) -> None:
         scope = {
             "tlfs": [{"name": "Adverse Events Summary", "type": "T", "source": "ADAE"}],
@@ -112,7 +122,6 @@ class TeamRecommendationTests(unittest.TestCase):
             first = recommend_teams(scope, history, [], cache_path)
             second = recommend_teams(scope, history, [], cache_path)
         self.assertEqual(first["recommendations"][0]["du_team"], "Team A")
-        self.assertEqual(first["recommendations"][0]["missing_adams"], [])
         self.assertEqual(second["cache"]["hits"], 4)
 
     def test_tlf_coverage_combines_evidence_from_multiple_historical_dids(self) -> None:
@@ -148,6 +157,32 @@ class TeamRecommendationTests(unittest.TestCase):
                 for item in recommendation["tlf_coverage_evidence"]
             },
             {"AE Summary": "DID-A", "Lab Summary": "DID-B"},
+        )
+
+    def test_recommendation_limits_results_to_selected_group_lead(self) -> None:
+        scope = {"tlfs": [{"name": "AE Summary", "type": "T", "source": "ADAE"}]}
+        history = [
+            {
+                "du_team": "Maggie Team", "group_leads": ["Zhang, Maggie"],
+                "did": "DID-A", "completion_date": "2026-08-01",
+                "tlfs": [{"name": "AE Summary", "type": "T", "source": "ADAE"}],
+            },
+            {
+                "du_team": "Other Team", "group_leads": ["Lee, Robin"],
+                "did": "DID-B", "completion_date": "2026-08-01",
+                "tlfs": [{"name": "AE Summary", "type": "T", "source": "ADAE"}],
+            },
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            result = recommend_teams(
+                scope,
+                history,
+                [],
+                Path(directory) / "similarity.joblib",
+                group_lead_name="Zhang, Maggie",
+            )
+        self.assertEqual(
+            [row["du_team"] for row in result["recommendations"]], ["Maggie Team"]
         )
 
 
