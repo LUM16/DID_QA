@@ -45,7 +45,8 @@ py du_team_recommendation.py refresh-history
 
 - DU Team Lead；
 - 该 DU 当前关联的 Group Lead 名称；
-- 该 DU 已完成 DID 的 TLF title/type/source 和实际完成日期；
+- 该 DU 成员实际负责 Generation 或 QC 的 completed-DID TLF
+  title/type/source 和实际完成日期；
 - 每个 DU 当前的 distinct Planned + Ongoing DID 数。
 
 推荐时首先以输入的 Group Lead 过滤 snapshot，只对该 Group 下的 DU 评分。旧版
@@ -58,8 +59,10 @@ snapshot 到 RSC 服务端 artifact cache。可通过
 
 ## TLF coverage：可跨多个历史 DID 合并
 
-系统逐条处理上传的目标 TLF。每条 TLF 在该 DU 的 completed history 中寻找最佳
-有效历史匹配，标题 semantic match 必须达到 `>= 0.70`。
+系统逐条处理上传的目标 TLF。每条 TLF 只在该 DU 成员实际被记录为
+`HAS_TLF.Generation` 或 `HAS_TLF.QC` 的 completed-DID TLF 中寻找最佳有效历史
+匹配；仅参与同一 DID、但没有负责该表的成员不贡献 coverage。标题 semantic match
+必须达到 `>= 0.70`。
 
 标题先标准化，再使用 character 3–5 gram 向量相似度；Type 和 Source 在两边均有
 值且精确一致时作为辅助 metadata。每条目标 TLF 都必须实际匹配，不能只因同一
