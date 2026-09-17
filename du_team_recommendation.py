@@ -304,6 +304,73 @@ def _recency_score(completion_date: Any) -> float:
     return 0.15 if completion_date else 0.0
 
 
+def _tlf_union_coverage(
+    target_tlfs: list[dict[str, str]],
+    history: list[dict[str, Any]],
+    semantic_candidates: Iterable[dict[str, Any]],
+    cache: dict[str, Any],
+) -> tuple[float, list[dict[str, Any]]]:
+    """Match each target TLF to its best available historical DID evidence."""
+    candidate_by_did = {
+        str(record["did"]): record for record in semantic_candidates
+    }
+    evidence = []
+    for target_tlf in target_tlfs:
+        target_title = _normalized_name(target_tlf.get("name"))
+        target_words = {
+            word for word in target_title.split() if len(word) >= 3
+        }
+        for record in history:
+            if any(
+                _normalized_name(item.get("name")) == target_title
+                or target_words
+                & {
+                    word
+                    for word in _normalized_name(item.get("name")).split()
+                    if len(word) >= 3
+                }
+                for item in record["tlfs"]
+            ):
+                candidate_by_did[str(record["did"])] = record
+        best: dict[str, Any] | None = None
+        for record in candidate_by_did.values():
+            similarity, single_tlf_coverage = _cached_tlf_semantic_similarity(
+                [target_tlf], record["tlfs"], cache
+            )
+            candidate = {
+                "did": record["did"],
+                "completion_date": record.get("completion_date"),
+                "matched": single_tlf_coverage == 1.0,
+                "similarity": similarity,
+            }
+            if best is None or (
+                candidate["matched"],
+                candidate["similarity"],
+                _date_or_minimum(candidate["completion_date"]),
+            ) > (
+                best["matched"],
+                best["similarity"],
+                _date_or_minimum(best["completion_date"]),
+            ):
+                best = candidate
+        evidence.append(
+            {
+                "target_tlf": target_tlf["name"],
+                "matched": bool(best and best["matched"]),
+                "evidence_did": best["did"] if best and best["matched"] else None,
+                "completion_date": (
+                    best["completion_date"] if best and best["matched"] else None
+                ),
+            }
+        )
+    coverage = (
+        sum(item["matched"] for item in evidence) / len(target_tlfs)
+        if target_tlfs
+        else 1.0
+    )
+    return coverage, evidence
+
+
 def recommend_teams(
     scope: dict[str, list[dict[str, str]]],
     history_rows: Iterable[dict[str, Any]],
@@ -370,12 +437,15 @@ def recommend_teams(
             ),
             reverse=True,
         )[:SEMANTIC_DID_CANDIDATE_LIMIT]
+        tlf_coverage, tlf_coverage_evidence = _tlf_union_coverage(
+            target["tlfs"], history, candidate_history, cache
+        )
         for record in candidate_history:
-            tlf_similarity, tlf_coverage = _cached_tlf_semantic_similarity(
+            tlf_similarity, single_did_tlf_coverage = _cached_tlf_semantic_similarity(
                 target["tlfs"], record["tlfs"], cache
             )
             combined = (
-                0.60 * tlf_coverage
+                0.60 * single_did_tlf_coverage
                 + 0.25 * _jaccard(_item_names(target["adams"]), _item_names(record["adams"]))
                 + 0.15 * _jaccard(_item_names(target["sdtms"]), _item_names(record["sdtms"]))
             )
@@ -384,7 +454,7 @@ def recommend_teams(
                     "did": record["did"],
                     "completion_date": record.get("completion_date"),
                     "combined_similarity": combined,
-                    "tlf_semantic_coverage": tlf_coverage,
+                    "tlf_semantic_coverage": single_did_tlf_coverage,
                     "tlf_semantic_similarity": tlf_similarity,
                 }
             )
@@ -400,7 +470,6 @@ def recommend_teams(
         similar_85 = [
             row for row in historical_similarity if row["combined_similarity"] >= 0.85
         ]
-        tlf_coverage = best["tlf_semantic_coverage"] if best else 0.0
         similar_score = (
             0.6 * (best["combined_similarity"] if best else 0.0)
             + 0.4 * min(1.0, len(similar_70) / 5)
@@ -427,6 +496,7 @@ def recommend_teams(
                 "du_team": team,
                 "score": round(score, 1),
                 "tlf_semantic_coverage": round(tlf_coverage, 3),
+                "tlf_coverage_evidence": tlf_coverage_evidence,
                 "adam_coverage": round(coverage["adams"], 3),
                 "sdtm_coverage": round(coverage["sdtms"], 3),
                 "similar_did_count_ge_70": len(similar_70),

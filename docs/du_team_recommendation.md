@@ -88,16 +88,15 @@ Overall score =
 
 TLF 是当前最高权重的 scope 指标。
 
-对新 Delivery 和某个 DU 的候选历史 DID，系统会使用现有 effort prediction
-中的 TLF comparison 逻辑：
+系统逐条处理新 Delivery 的每一个目标 TLF，并在该 DU 的候选 completed DID
+中寻找其最佳历史匹配。每次比较使用现有 effort prediction 中的 TLF comparison
+逻辑：
 
 - TLF title 的标准化 character 3–5 gram 相似度；
 - `Type` 相同的加权信息；
 - `Source` 相同的加权信息；
 - one-to-one matching：一个目标 TLF 不能重复匹配多个历史 TLF；
 - 只有匹配分数 `>= 0.70` 才计为 semantic match。
-
-对于每一个历史 DID：
 
 ```text
 TLF semantic coverage =
@@ -106,12 +105,21 @@ matched target TLF count
 target TLF count
 ```
 
-该 DU 的 TLF semantic coverage 取其候选历史 DID 中的**最大值**。因此它回答：
+每一个目标 TLF 可由不同历史 DID 提供证据。因此若目标有两个 TLF，TLF-A 曾在
+历史 DID-1 完成、TLF-B 曾在历史 DID-2 完成，则该 DU 的 TLF coverage 为
+`2 / 2 = 100%`。页面会逐条显示每个目标 TLF 的 evidence DID 与完成日期。
 
-> 该 DU 有没有完成过一个 Delivery，其 TLF scope 最能覆盖当前目标？
+这项指标回答：
 
-这不是把所有历史 DID 的 TLF 无限制合并后得到的 coverage；这样可以避免零散、
-互不相关的历史工作被误判为一个完整相似项目。
+> 该 DU 的 completed history 合计是否覆盖当前每一个目标 TLF？
+
+为了避免无边界比较，系统保留原有的近期/数据集候选 DID，并额外纳入标题完全
+一致或有有效共同标题词的历史 DID。每条 TLF 在这些 DID 中取最佳有效匹配。
+这不是把 TLF 文本简单拼接后按数量计数：每一个目标 TLF 都必须实际达到 `>= 0.70`
+的语义匹配阈值才视为覆盖。
+
+“Similar DID experience”和“Recent relevant experience”仍基于单个完整的历史
+DID scope，而不因多个零散 TLF 的合并覆盖而把它们误报为一个完整相似 Delivery。
 
 ### 2. ADaM coverage — 18 分
 

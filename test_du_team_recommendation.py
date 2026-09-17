@@ -113,7 +113,42 @@ class TeamRecommendationTests(unittest.TestCase):
             second = recommend_teams(scope, history, [], cache_path)
         self.assertEqual(first["recommendations"][0]["du_team"], "Team A")
         self.assertEqual(first["recommendations"][0]["missing_adams"], [])
-        self.assertEqual(second["cache"]["hits"], 2)
+        self.assertEqual(second["cache"]["hits"], 4)
+
+    def test_tlf_coverage_combines_evidence_from_multiple_historical_dids(self) -> None:
+        scope = {
+            "tlfs": [
+                {"name": "AE Summary", "type": "T", "source": "ADAE"},
+                {"name": "Lab Summary", "type": "T", "source": "ADLB"},
+            ],
+            "adams": [],
+            "sdtms": [],
+        }
+        history = [
+            {
+                "du_team": "Team A", "did": "DID-A", "completion_date": "2026-08-01",
+                "tlfs": [{"name": "AE Summary", "type": "T", "source": "ADAE"}],
+                "adams": [], "sdtms": [],
+            },
+            {
+                "du_team": "Team A", "did": "DID-B", "completion_date": "2026-07-01",
+                "tlfs": [{"name": "Lab Summary", "type": "T", "source": "ADLB"}],
+                "adams": [], "sdtms": [],
+            },
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            result = recommend_teams(
+                scope, history, [], Path(directory) / "similarity.joblib"
+            )
+        recommendation = result["recommendations"][0]
+        self.assertEqual(recommendation["tlf_semantic_coverage"], 1.0)
+        self.assertEqual(
+            {
+                item["target_tlf"]: item["evidence_did"]
+                for item in recommendation["tlf_coverage_evidence"]
+            },
+            {"AE Summary": "DID-A", "Lab Summary": "DID-B"},
+        )
 
 
 if __name__ == "__main__":

@@ -403,6 +403,20 @@ def render_team_recommendation() -> None:
             st.warning(" | ".join(gaps))
         else:
             st.success("No exact ADaM or SDTM coverage gaps were found.")
+        with st.expander("TLF coverage evidence across completed DIDs"):
+            st.dataframe(
+                [
+                    {
+                        "Target TLF": item["target_tlf"],
+                        "Covered": "Yes" if item["matched"] else "No",
+                        "Evidence DID": item["evidence_did"] or "",
+                        "Completed": item["completion_date"] or "",
+                    }
+                    for item in row["tlf_coverage_evidence"]
+                ],
+                use_container_width=True,
+                hide_index=True,
+            )
         with st.expander("Most similar completed DIDs"):
             st.dataframe(
                 [
