@@ -500,9 +500,33 @@ def render_tlf_person_allocation() -> None:
         f"LLM Team Lead match: {result['team_match']['team_lead_name']} "
         "(strictly validated against snapshot candidates)."
     )
+    from tlf_person_allocation import allocation_excel_bytes
+
+    st.download_button(
+        "Download allocation Excel",
+        data=allocation_excel_bytes(result),
+        file_name="tlf_person_allocation.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True,
+    )
+    group_rosters = {}
+    for allocation in result["allocations"]:
+        roster = group_rosters.setdefault(
+            allocation["group"], {"Generation": set(), "QC": set()}
+        )
+        for role, label in (("generation", "Generation"), ("qc", "QC")):
+            primary = allocation[role]["primary"]
+            if primary:
+                roster[label].add(primary["person"])
+    for group, roster in group_rosters.items():
+        st.caption(
+            f"{group} primary roster · Generation: "
+            f"{', '.join(sorted(roster['Generation'])) or 'None'} · QC: "
+            f"{', '.join(sorted(roster['QC'])) or 'None'}"
+        )
     for allocation in result["allocations"]:
         tlf = allocation["tlf"]
-        st.markdown(f"### {tlf['name']}")
+        st.markdown(f"### {tlf['name']} · {allocation['group']}")
         rows = []
         for role, label in (("generation", "Generation"), ("qc", "QC")):
             recommendation = allocation[role]

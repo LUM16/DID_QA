@@ -9,10 +9,12 @@ import re
 from collections import defaultdict
 from datetime import datetime
 from functools import lru_cache
+from io import BytesIO
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
 import joblib
+from openpyxl import Workbook
 
 from du_team_recommendation import (
     _date_or_minimum,
@@ -47,7 +49,10 @@ DEFAULT_TLF_PERSON_SNAPSHOT_URL = (
 # Each prior primary assignment reduces the next score by 12 points.
 PRIMARY_ALLOCATION_PENALTY = 12.0
 PERSON_TLF_CANDIDATE_LIMIT = 25
-_ROLE_HISTORY_CACHE: dict[tuple[int, str], dict[str, dict[str, Any]]] = {}
+MAX_GROUP_PRIMARY_PEOPLE_PER_ROLE = 2
+_ROLE_HISTORY_CACHE: dict[
+    tuple[int, str], tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]
+] = {}
 
 PERSON_TEAM_LEADS_QUERY = """
 MATCH (p:Person)
@@ -468,29 +473,151 @@ def _backups(
     return ranked[:2]
 
 
+def _split_source_names(source: str) -> set[str]:
+    return {
+        _normalized_name(value)
+        for value in re.split(r"[,;|]+", source)
+        if _normalized_name(value)
+    }
+
+
+def _grouped_targets(
+    scope: dict[str, list[dict[str, str]]]
+) -> list[tuple[dict[str, str], str]]:
+    """Prefer direct SDTM source matches, then source sets, then an individual TLF."""
+    sdtm_names = {_normalized_name(item.get("name")) for item in scope["sdtms"]}
+    grouped = []
+    for index, target in enumerate(scope["tlfs"], start=1):
+        source_names = _split_source_names(target.get("source", ""))
+        mapped_sdtms = sorted(source_names & sdtm_names)
+        if mapped_sdtms:
+            group_key = f"SDTM: {', '.join(mapped_sdtms)}"
+        elif source_names:
+            group_key = f"Source: {', '.join(sorted(source_names))}"
+        else:
+            group_key = f"Individual: TLF {index}"
+        grouped.append((target, group_key))
+    return grouped
+
+
+def _rank_group_primary(
+    candidates: Iterable[dict[str, Any]],
+    allocations: dict[str, int],
+    role_owners: set[str],
+    other_role_owners: set[str],
+) -> list[dict[str, Any]]:
+    eligible = _rank_primary(candidates, allocations, other_role_owners)
+    preferred = [candidate for candidate in eligible if candidate["person"] in role_owners]
+    if preferred:
+        return preferred
+    if len(role_owners) >= MAX_GROUP_PRIMARY_PEOPLE_PER_ROLE:
+        return []
+    return eligible
+
+
+def allocation_export_rows(result: dict[str, Any]) -> list[dict[str, Any]]:
+    """Flatten allocation results into one spreadsheet row per uploaded TLF."""
+    rows = []
+    for allocation in result["allocations"]:
+        tlf = allocation["tlf"]
+        group_type, _, group_key = allocation["group"].partition(": ")
+        row = {
+            "Group Type": group_type,
+            "Group Key": group_key or allocation["group"],
+            "TLF Title": tlf["name"],
+            "TLF Type": tlf.get("type", ""),
+            "Source Datasets": tlf.get("source", ""),
+            "Lead Review Required": "Yes" if allocation["lead_review_required"] else "No",
+            "Review Reason": allocation["fallback_reason"] or "",
+            "Snapshot Generated At": result.get("snapshot", {}).get("generated_at", ""),
+            "Matched Team Lead": result.get(
+                "team_lead_name",
+                result.get("team_match", {}).get("team_lead_name", ""),
+            ),
+        }
+        for role, label in (("generation", "Generation"), ("qc", "QC")):
+            recommendation = allocation[role]
+            primary = recommendation["primary"]
+            row[f"{label} Primary"] = primary["person"] if primary else ""
+            row[f"{label} Primary Score"] = primary["adjusted_score"] if primary else None
+            row[f"{label} Primary Active DIDs"] = (
+                primary["active_did_count"] if primary else None
+            )
+            row[f"{label} Evidence DID"] = primary["evidence_did"] if primary else ""
+            for index, backup in enumerate(recommendation["backups"], start=1):
+                row[f"{label} Backup {index}"] = backup["person"]
+                row[f"{label} Backup {index} Score"] = backup["adjusted_score"]
+                row[f"{label} Backup {index} Active DIDs"] = backup["active_did_count"]
+                row[f"{label} Backup {index} Evidence DID"] = backup["evidence_did"]
+            for index in range(len(recommendation["backups"]) + 1, 3):
+                row[f"{label} Backup {index}"] = ""
+                row[f"{label} Backup {index} Score"] = None
+                row[f"{label} Backup {index} Active DIDs"] = None
+                row[f"{label} Backup {index} Evidence DID"] = ""
+        rows.append(row)
+    return rows
+
+
+def allocation_excel_bytes(result: dict[str, Any]) -> bytes:
+    """Create a downloadable one-row-per-TLF allocation workbook."""
+    rows = allocation_export_rows(result)
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = "TLF Allocation"
+    if rows:
+        headers = list(rows[0])
+        worksheet.append(headers)
+        for row in rows:
+            worksheet.append([row[header] for header in headers])
+        worksheet.freeze_panes = "A2"
+        worksheet.auto_filter.ref = worksheet.dimensions
+        for column in worksheet.columns:
+            letter = column[0].column_letter
+            worksheet.column_dimensions[letter].width = min(
+                45, max(12, max(len(str(cell.value or "")) for cell in column) + 2)
+            )
+    output = BytesIO()
+    workbook.save(output)
+    return output.getvalue()
+
+
 def allocate_tlf_people(
     tlfs: Iterable[dict[str, str]],
     team_lead_name: str,
     history_rows: Iterable[dict[str, Any]],
     workload_rows: Iterable[dict[str, Any]],
     cache_path: Path = DEFAULT_SIMILARITY_CACHE_PATH,
+    group_keys: Iterable[str] | None = None,
 ) -> dict[str, Any]:
     """Return primary and two backups per role, applying run-local primary balancing."""
     targets = [item for item in tlfs if str(item.get("name") or "").strip()]
     if not targets:
         raise ValueError("No TLF rows were found in the uploaded input.")
+    groups = list(group_keys) if group_keys is not None else [
+        f"Individual: TLF {index}" for index in range(1, len(targets) + 1)
+    ]
+    if len(groups) != len(targets):
+        raise ValueError("Each uploaded TLF must have exactly one allocation group.")
     rows = history_rows if isinstance(history_rows, list) else list(history_rows)
     workloads = _workload_scores(workload_rows)
     maximum_workload = max(workloads.values(), default=0)
     cache = _load_similarity_cache(_resolve_recommendation_cache_path(cache_path))
     role_history_key = (id(rows), team_lead_name)
-    role_history = _ROLE_HISTORY_CACHE.get(role_history_key)
+    cached_role_history = _ROLE_HISTORY_CACHE.get(role_history_key)
+    role_history = (
+        cached_role_history[1]
+        if cached_role_history and cached_role_history[0] is rows
+        else None
+    )
     if role_history is None:
         role_history = _team_role_history(team_lead_name, rows)
-        _ROLE_HISTORY_CACHE[role_history_key] = role_history
+        _ROLE_HISTORY_CACHE[role_history_key] = (rows, role_history)
     allocations: dict[str, int] = defaultdict(int)
+    group_owners: dict[str, dict[str, set[str]]] = defaultdict(
+        lambda: {"generation": set(), "qc": set()}
+    )
     allocations_result = []
-    for target in targets:
+    for target, group_key in zip(targets, groups):
         generation = _role_candidates(
             target,
             _indexed_role_candidates(target, role_history["generation"]),
@@ -505,12 +632,24 @@ def allocate_tlf_people(
             maximum_workload,
             cache,
         )
-        generation_primary = next(iter(_rank_primary(generation, allocations)), None)
+        owners = group_owners[group_key]
+        generation_primary = next(
+            iter(
+                _rank_group_primary(
+                    generation, allocations, owners["generation"], owners["qc"]
+                )
+            ),
+            None,
+        )
         if generation_primary:
             allocations[generation_primary["person"]] += 1
-        qc_ranked = _rank_primary(
-            qc, allocations,
-            {generation_primary["person"]} if generation_primary else set(),
+            owners["generation"].add(generation_primary["person"])
+        qc_ranked = _rank_group_primary(
+            qc,
+            allocations,
+            owners["qc"],
+            owners["generation"]
+            | ({generation_primary["person"]} if generation_primary else set()),
         )
         qc_primary = next(iter(qc_ranked), None)
         lead_review_required = False
@@ -544,11 +683,13 @@ def allocate_tlf_people(
                 )
         if qc_primary and qc_primary["person"] != (generation_primary or {}).get("person"):
             allocations[qc_primary["person"]] += 1
+            owners["qc"].add(qc_primary["person"])
         generation_backups = _backups(generation, generation_primary, allocations)
         qc_backups = _backups(qc, qc_primary, allocations)
         allocations_result.append(
             {
                 "tlf": target,
+                "group": group_key,
                 "generation": {"primary": generation_primary, "backups": generation_backups},
                 "qc": {"primary": qc_primary, "backups": qc_backups},
                 "lead_review_required": lead_review_required,
@@ -580,11 +721,14 @@ def allocate_uploaded_tlfs(
     """Load the upload and local snapshot, resolve the team, and allocate TLFs."""
     history_rows, workload_rows, snapshot = load_person_tlf_snapshot()
     match = resolve_team_lead_name(team_lead_input, team_lead_candidates(history_rows), chat_fn)
+    scope = load_uploaded_scope(primary_file, data_csv_file)
+    grouped_targets = _grouped_targets(scope)
     result = allocate_tlf_people(
-        load_uploaded_scope(primary_file, data_csv_file)["tlfs"],
+        [target for target, _ in grouped_targets],
         match["team_lead_name"],
         history_rows,
         workload_rows,
+        group_keys=[group_key for _, group_key in grouped_targets],
     )
     result["snapshot"] = snapshot
     result["team_match"] = match

@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import unittest
+from io import BytesIO
 from pathlib import Path
 from unittest.mock import patch
+
+from openpyxl import load_workbook
 
 from tlf_person_allocation import (
     DEFAULT_TLF_PERSON_SNAPSHOT_PATH,
     _resolve_snapshot_path,
+    _grouped_targets,
+    allocation_excel_bytes,
     allocate_tlf_people,
     load_person_tlf_snapshot,
     refresh_person_tlf_snapshot,
@@ -127,6 +132,73 @@ class TlfPersonAllocationTests(unittest.TestCase):
         self.assertTrue(allocation["lead_review_required"])
         self.assertEqual(allocation["generation"]["primary"]["person"], "Only")
         self.assertEqual(allocation["qc"]["primary"]["person"], "Only")
+
+    def test_grouped_primaries_keep_roles_consistent(self) -> None:
+        rows = [
+            evidence("Gen", "generation", "D1", "AE Summary"),
+            evidence("Gen", "generation", "D2", "AE Listing"),
+            evidence("QC", "qc", "D3", "AE Summary"),
+            evidence("QC", "qc", "D4", "AE Listing"),
+            evidence("Other", "qc", "D5", "AE Summary"),
+        ]
+        result = allocate_tlf_people(
+            [
+                {"name": "AE Summary", "type": "T", "source": "AE"},
+                {"name": "AE Listing", "type": "T", "source": "AE"},
+            ],
+            "Team A",
+            rows,
+            [],
+            self.workspace / "cache.joblib",
+            group_keys=["SDTM: AE", "SDTM: AE"],
+        )
+        allocations = result["allocations"]
+        self.assertEqual(
+            {row["generation"]["primary"]["person"] for row in allocations}, {"Gen"}
+        )
+        self.assertEqual(len({row["qc"]["primary"]["person"] for row in allocations}), 1)
+        self.assertNotIn(
+            allocations[0]["generation"]["primary"]["person"],
+            {row["qc"]["primary"]["person"] for row in allocations},
+        )
+
+    def test_grouping_and_excel_export(self) -> None:
+        grouped = _grouped_targets(
+            {
+                "tlfs": [
+                    {"name": "AE Summary", "type": "T", "source": "AE"},
+                    {"name": "AE Listing", "type": "L", "source": "ADAE"},
+                    {"name": "No source", "type": "T", "source": ""},
+                ],
+                "sdtms": [{"name": "AE"}],
+            }
+        )
+        self.assertEqual([group for _, group in grouped], [
+            "SDTM: AE", "Source: ADAE", "Individual: TLF 3",
+        ])
+        result = allocate_tlf_people(
+            [{"name": "AE Summary", "type": "T", "source": "AE"}],
+            "Team A",
+            [
+                evidence("G1", "generation", "D1"),
+                evidence("G2", "generation", "D2"),
+                evidence("G3", "generation", "D3"),
+                evidence("Q1", "qc", "D4"),
+                evidence("Q2", "qc", "D5"),
+                evidence("Q3", "qc", "D6"),
+            ],
+            [],
+            self.workspace / "cache.xlsx.joblib",
+            group_keys=["SDTM: AE"],
+        )
+        workbook = load_workbook(BytesIO(allocation_excel_bytes(result)))
+        sheet = workbook["TLF Allocation"]
+        headers = [cell.value for cell in sheet[1]]
+        self.assertEqual(sheet.max_row, 2)
+        self.assertIn("Group Type", headers)
+        self.assertIn("Group Key", headers)
+        self.assertIn("Generation Backup 2", headers)
+        self.assertIn("QC Backup 2", headers)
 
 
 if __name__ == "__main__":

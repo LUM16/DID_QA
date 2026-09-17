@@ -57,3 +57,22 @@ To prevent concentration within a run, every primary already assigned to a
 person deducts **12 points** from their later primary score. There is no hard
 assignment cap: the dynamic penalty preserves a complete recommendation for
 large inputs while making concentrated assignments progressively less likely.
+
+## Source/domain continuity and Excel output
+
+To reduce unnecessary handoffs, primary ownership is selected within a group:
+
+1. when a TLF `Source Datasets` value directly matches an SDTM domain listed in
+   the uploaded Data sheet, it uses that SDTM domain group;
+2. otherwise, its original `Source Datasets` values define the group;
+3. a TLF with no source is its own group.
+
+Within each group, Generation primaries use at most two people and QC primaries
+use at most two separate people. Once a person is a Generation primary in a
+group, they cannot become a QC primary for another TLF in that group; the
+reciprocal rule also applies. Backups stay unconstrained so that each TLF
+retains alternatives.
+
+The page can download `tlf_person_allocation.xlsx`. It has one row per input
+TLF, its resolved group, Generation/QC primary, both backups for each role,
+scores, current active DID counts, evidence DID, and any review flag.
