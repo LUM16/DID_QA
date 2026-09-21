@@ -527,21 +527,35 @@ def render_team_recommendation() -> None:
         type=["xlsx", "csv"],
         key="du_scope_primary",
     )
-    group_lead_input = st.text_input(
+    try:
+        from du_team_recommendation import group_lead_candidates, load_history_snapshot
+
+        history_rows, _, _ = load_history_snapshot()
+        group_leads = group_lead_candidates(history_rows)
+    except (RuntimeError, ValueError, FileNotFoundError) as exc:
+        st.error(f"DU history snapshot is unavailable: {exc}")
+        return
+    if not group_leads:
+        st.error("The DU history snapshot contains no Group Lead candidates.")
+        return
+    group_lead_input = st.selectbox(
         "Group Lead name",
-        placeholder="For example: Maggie",
+        options=group_leads,
+        index=None,
+        placeholder="Type to search, then select a Group Lead",
+        help="Type a few characters to filter the current snapshot's Group Lead list.",
         key="du_scope_group_lead",
     )
     if not primary_file:
         return
     upload_key = (
-        group_lead_input.strip(),
+        group_lead_input or "",
         primary_file.name,
         len(primary_file.getvalue()),
     )
     if st.button("Recommend DU teams", type="primary", use_container_width=True):
-        if not group_lead_input.strip():
-            st.error("Enter a Group Lead name, for example Maggie.")
+        if not group_lead_input:
+            st.error("Select a Group Lead from the searchable list.")
             return
         try:
             from du_team_recommendation import recommend_uploaded_scope
