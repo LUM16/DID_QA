@@ -20,6 +20,7 @@ from effort_prediction import (
     GITHUB_ARTIFACT_BASE_URL,
     TLF_SEMANTIC_MATCH_THRESHOLD,
     _cached_tlf_semantic_similarity,
+    _assignment_matches,
     _load_similarity_cache,
     _normalized_name,
     _resolve_prediction_artifact,
@@ -39,9 +40,24 @@ WITH DISTINCT toString(p.Team_Lead_Name) AS du_team, d
 CALL (du_team) {
   MATCH (member:Person)
   WHERE toString(member.Team_Lead_Name) = du_team
-    AND member.Group_Lead_Name IS NOT NULL
-    AND trim(toString(member.Group_Lead_Name)) <> ''
-  RETURN collect(DISTINCT toString(member.Group_Lead_Name)) AS group_leads
+  OPTIONAL MATCH (ta:Person)
+  WHERE toUpper(trim(toString(ta.TA_Lead))) = 'Y'
+    AND toString(ta.Name) = toString(member.TA_Lead_Name)
+  RETURN collect(DISTINCT CASE
+    WHEN member.Group_Lead_Name IS NOT NULL
+      AND trim(toString(member.Group_Lead_Name)) <> ''
+    THEN toString(member.Group_Lead_Name)
+  END) AS group_leads,
+  collect(DISTINCT CASE
+    WHEN ta IS NOT NULL
+      AND member.Group_Lead_Name IS NOT NULL
+      AND trim(toString(member.Group_Lead_Name)) <> ''
+    THEN {
+      ta_lead: toString(ta.Name),
+      group_lead: toString(member.Group_Lead_Name)
+    }
+  END) AS organization_mappings,
+  collect(DISTINCT toString(member.Name)) AS team_members
 }
 CALL (d) {
   OPTIONAL MATCH (d)-[t:HAS_TLF]->(tlf:TLF)
@@ -52,6 +68,8 @@ CALL (d) {
 }
 RETURN du_team,
        group_leads,
+       organization_mappings,
+       team_members,
        toString(d.DID) AS did,
        substring(toString(d.Actual_Delivery_Date), 0, 10) AS completion_date,
        tlfs
@@ -68,7 +86,7 @@ RETURN p.Team_Lead_Name AS du_team,
 """
 
 SEMANTIC_DID_CANDIDATE_LIMIT = 50
-DU_HISTORY_SNAPSHOT_VERSION = "du-team-history-v2-tlf-only-groups"
+DU_HISTORY_SNAPSHOT_VERSION = "du-team-history-v4-ta-group-hierarchy"
 DEFAULT_DU_HISTORY_SNAPSHOT_PATH = (
     Path(__file__).resolve().parent / "artifacts" / "du_team_history_snapshot.joblib"
 )
@@ -121,7 +139,15 @@ def refresh_history_snapshot(
     output_path: Path = DEFAULT_DU_HISTORY_SNAPSHOT_PATH,
 ) -> dict[str, Any]:
     """Fetch current Neo4j DU evidence and save it as a reusable local snapshot."""
-    history_rows = _read_query(TEAM_HISTORY_QUERY)
+    history_rows = [
+        {
+            **row,
+            "tlfs": _role_owned_tlfs(
+                row.get("tlfs", []), row.get("team_members", [])
+            ),
+        }
+        for row in _read_query(TEAM_HISTORY_QUERY)
+    ]
     if not history_rows:
         raise ValueError("Neo4j returned no completed DU team history to cache.")
     workload_rows = _read_query(TEAM_WORKLOAD_QUERY)
@@ -222,14 +248,70 @@ def _scope_from_rows(
     }
 
 
-def group_lead_candidates(history_rows: Iterable[dict[str, Any]]) -> list[str]:
-    """Return stored Group_Lead_Name values available for recommendation filtering."""
+def _role_owned_tlfs(
+    tlfs: Iterable[dict[str, Any]], team_members: Iterable[Any]
+) -> list[dict[str, Any]]:
+    """Keep only TLFs actually assigned to a current DU member as Gen or QC."""
+    members = [str(member).strip() for member in team_members if str(member).strip()]
+    return [
+        tlf
+        for tlf in tlfs
+        if any(
+            _assignment_matches(tlf.get(role), member)
+            for member in members
+            for role in ("generation", "qc")
+        )
+    ]
+
+
+def _organization_mappings(row: dict[str, Any]) -> list[dict[str, str]]:
+    """Return distinct current TA Lead / Group Lead mappings for one DU history row."""
+    mappings: dict[tuple[str, str], dict[str, str]] = {}
+    for mapping in row.get("organization_mappings", []):
+        if not isinstance(mapping, dict):
+            continue
+        ta_lead = str(mapping.get("ta_lead") or "").strip()
+        group_lead = str(mapping.get("group_lead") or "").strip()
+        if ta_lead and group_lead:
+            mappings[(ta_lead, group_lead)] = {
+                "ta_lead": ta_lead,
+                "group_lead": group_lead,
+            }
+    return list(mappings.values())
+
+
+def ta_lead_candidates(history_rows: Iterable[dict[str, Any]]) -> list[str]:
+    """Return TA Leads with at least one current Group/DU mapping in the snapshot."""
     return sorted(
         {
-            str(group_lead).strip()
+            mapping["ta_lead"]
             for row in history_rows
-            for group_lead in row.get("group_leads", [])
-            if str(group_lead).strip()
+            for mapping in _organization_mappings(row)
+        },
+        key=str.casefold,
+    )
+
+
+def group_lead_candidates(
+    history_rows: Iterable[dict[str, Any]], ta_lead_name: str | None = None
+) -> list[str]:
+    """Return Group Leads, optionally limited to one current TA Lead."""
+    if ta_lead_name is None:
+        return sorted(
+            {
+                str(group_lead).strip()
+                for row in history_rows
+                for group_lead in row.get("group_leads", [])
+                if str(group_lead).strip()
+            },
+            key=str.casefold,
+        )
+    return sorted(
+        {
+            mapping["group_lead"]
+            for row in history_rows
+            for mapping in _organization_mappings(row)
+            if mapping["ta_lead"] == ta_lead_name
         },
         key=str.casefold,
     )
@@ -412,6 +494,7 @@ def recommend_teams(
     cache_path: Path = DEFAULT_SIMILARITY_CACHE_PATH,
     top_n: int = 3,
     group_lead_name: str | None = None,
+    ta_lead_name: str | None = None,
 ) -> dict[str, Any]:
     """Rank current DU teams from completed Delivery scope and active workload."""
     resolved_cache_path = _resolve_recommendation_cache_path(cache_path)
@@ -427,15 +510,26 @@ def recommend_teams(
             for item in row.get("group_leads", [])
             if str(item).strip()
         ]
+        organization_mappings = _organization_mappings(row)
+        has_selected_hierarchy = any(
+            mapping["ta_lead"] == ta_lead_name
+            and mapping["group_lead"] == group_lead_name
+            for mapping in organization_mappings
+        )
         if (
             not team
             or not did
             or (group_lead_name is not None and group_lead_name not in group_leads)
+            or (
+                ta_lead_name is not None
+                and not has_selected_hierarchy
+            )
         ):
             continue
         by_team[team][did] = {
             **row,
             "group_leads": group_leads,
+            "organization_mappings": organization_mappings,
             "tlfs": _unique_items(row.get("tlfs") or []),
         }
     if not by_team:
@@ -531,6 +625,7 @@ def recommend_teams(
     _save_similarity_cache(cache, resolved_cache_path)
     return {
         "target_counts": {"tlfs": len(target["tlfs"])},
+        "ta_lead_name": ta_lead_name,
         "group_lead_name": group_lead_name,
         "recommendations": recommendations[:top_n],
         "cache": {
@@ -542,18 +637,25 @@ def recommend_teams(
 
 
 def recommend_uploaded_scope(
-    group_lead_input: str, primary_file: Any, data_csv_file: Any | None = None
+    ta_lead_name: str,
+    group_lead_name: str,
+    primary_file: Any,
+    data_csv_file: Any | None = None,
 ) -> dict[str, Any]:
     """Load an uploaded scope and rank it against the locally cached DU history."""
     history_rows, workload_rows, snapshot = load_history_snapshot()
-    group_lead_name = resolve_group_lead_name(
-        group_lead_input, group_lead_candidates(history_rows)
-    )
+    if ta_lead_name not in ta_lead_candidates(history_rows):
+        raise ValueError("Select a TA Lead from the current DU history snapshot.")
+    if group_lead_name not in group_lead_candidates(history_rows, ta_lead_name):
+        raise ValueError(
+            "Select a Group Lead that belongs to the selected TA Lead in the current DU history snapshot."
+        )
     result = recommend_teams(
         load_uploaded_scope(primary_file, data_csv_file, require_data=False),
         history_rows,
         workload_rows,
         group_lead_name=group_lead_name,
+        ta_lead_name=ta_lead_name,
     )
     result["history_snapshot"] = snapshot
     return result

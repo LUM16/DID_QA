@@ -12,12 +12,14 @@ from du_team_recommendation import (
     DEFAULT_DU_HISTORY_SNAPSHOT_PATH,
     _resolve_history_snapshot_path,
     _resolve_recommendation_cache_path,
+    _role_owned_tlfs,
     _scope_from_rows,
     group_lead_candidates,
     load_history_snapshot,
     recommend_teams,
     refresh_history_snapshot,
     resolve_group_lead_name,
+    ta_lead_candidates,
 )
 
 
@@ -35,7 +37,16 @@ class TeamRecommendationTests(unittest.TestCase):
         resolver.assert_called_once()
 
     def test_refresh_and_load_history_snapshot(self) -> None:
-        history_rows = [{"du_team": "Team A", "did": "DID-A"}]
+        history_rows = [{
+            "du_team": "Team A", "did": "DID-A", "team_members": ["Owner"],
+            "organization_mappings": [
+                {"ta_lead": "TA One", "group_lead": "Group A"}
+            ],
+            "tlfs": [
+                {"name": "Owned", "generation": "Owner", "qc": ""},
+                {"name": "Observed", "generation": "Other", "qc": ""},
+            ],
+        }]
         workload_rows = [{"du_team": "Team A", "active_did_count": 2}]
         with tempfile.TemporaryDirectory() as directory:
             snapshot_path = Path(directory) / "du-history.joblib"
@@ -45,7 +56,11 @@ class TeamRecommendationTests(unittest.TestCase):
             ):
                 saved = refresh_history_snapshot(snapshot_path)
             loaded_history, loaded_workload, details = load_history_snapshot(snapshot_path)
-        self.assertEqual(loaded_history, history_rows)
+        self.assertEqual(loaded_history[0]["tlfs"][0]["name"], "Owned")
+        self.assertEqual(
+            loaded_history[0]["organization_mappings"],
+            [{"ta_lead": "TA One", "group_lead": "Group A"}],
+        )
         self.assertEqual(loaded_workload, workload_rows)
         self.assertEqual(saved["history_row_count"], 1)
         self.assertEqual(details["workload_row_count"], 1)
@@ -91,6 +106,17 @@ class TeamRecommendationTests(unittest.TestCase):
         self.assertEqual({item["name"] for item in scope["adams"]}, {"ADAE", "ADSL"})
         self.assertEqual(scope["sdtms"][0]["name"], "AE")
 
+    def test_role_owned_tlfs_excludes_unowned_delivery_scope(self) -> None:
+        owned = _role_owned_tlfs(
+            [
+                {"name": "Gen TLF", "generation": "Member A", "qc": ""},
+                {"name": "QC TLF", "generation": "", "qc": ["Member B"]},
+                {"name": "Unowned TLF", "generation": "Other", "qc": "Other"},
+            ],
+            ["Member A", "Member B"],
+        )
+        self.assertEqual([item["name"] for item in owned], ["Gen TLF", "QC TLF"])
+
     def test_group_lead_resolver_accepts_unique_name_token(self) -> None:
         candidates = group_lead_candidates(
             [{"group_leads": ["Zhang, Maggie", "Lee, Robin"]}]
@@ -98,6 +124,21 @@ class TeamRecommendationTests(unittest.TestCase):
         self.assertEqual(resolve_group_lead_name("Maggie", candidates), "Zhang, Maggie")
         with self.assertRaisesRegex(ValueError, "uniquely match"):
             resolve_group_lead_name("Unknown", candidates)
+
+    def test_ta_lead_filters_group_lead_candidates(self) -> None:
+        history = [
+            {
+                "group_leads": ["Group A", "Group B"],
+                "organization_mappings": [
+                    {"ta_lead": "TA One", "group_lead": "Group A"},
+                    {"ta_lead": "TA Two", "group_lead": "Group B"},
+                ],
+            }
+        ]
+
+        self.assertEqual(ta_lead_candidates(history), ["TA One", "TA Two"])
+        self.assertEqual(group_lead_candidates(history, "TA One"), ["Group A"])
+        self.assertEqual(group_lead_candidates(history, "TA Two"), ["Group B"])
 
     def test_recommendation_prefers_scope_coverage_and_reuses_cache(self) -> None:
         scope = {
@@ -183,6 +224,44 @@ class TeamRecommendationTests(unittest.TestCase):
             )
         self.assertEqual(
             [row["du_team"] for row in result["recommendations"]], ["Maggie Team"]
+        )
+
+    def test_recommendation_limits_results_to_selected_ta_group_path(self) -> None:
+        scope = {"tlfs": [{"name": "AE Summary", "type": "T", "source": "ADAE"}]}
+        history = [
+            {
+                "du_team": "TA One Team",
+                "group_leads": ["Shared Group"],
+                "organization_mappings": [
+                    {"ta_lead": "TA One", "group_lead": "Shared Group"}
+                ],
+                "did": "DID-A",
+                "completion_date": "2026-08-01",
+                "tlfs": [{"name": "AE Summary", "type": "T", "source": "ADAE"}],
+            },
+            {
+                "du_team": "TA Two Team",
+                "group_leads": ["Shared Group"],
+                "organization_mappings": [
+                    {"ta_lead": "TA Two", "group_lead": "Shared Group"}
+                ],
+                "did": "DID-B",
+                "completion_date": "2026-08-01",
+                "tlfs": [{"name": "AE Summary", "type": "T", "source": "ADAE"}],
+            },
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            result = recommend_teams(
+                scope,
+                history,
+                [],
+                Path(directory) / "similarity.joblib",
+                group_lead_name="Shared Group",
+                ta_lead_name="TA One",
+            )
+        self.assertEqual(
+                [row["du_team"] for row in result["recommendations"]],
+            ["TA One Team"],
         )
 
 

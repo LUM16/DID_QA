@@ -2,19 +2,22 @@
 
 ## 目的
 
-**Recommend DU Team** 根据新 Delivery 的 TLF scope，为指定 Group Lead 下当前
-所属的 DU Team 排序。它是基于已完成 DID 经验和当前 active DID work burden 的
+**Recommend DU Team** 根据新 Delivery 的 TLF scope，为指定 TA Lead 和 Group Lead
+路径下当前所属的 DU Team 排序。它是基于已完成 DID 经验和当前 active DID work burden 的
 可解释决策支持工具，不是训练模型，不自动修改 Neo4j assignment。
 
-DU 由 `Person.Team_Lead_Name` 定义；Group 由 `Person.Group_Lead_Name` 定义。
-两者均使用 snapshot 刷新时的当前人员组织归属，而不是 DID 历史完成时的组织快照。
+DU 由 `Person.Team_Lead_Name` 定义；Group 由 `Person.Group_Lead_Name` 定义。TA
+mapping 使用成员的 `Person.TA_Lead_Name`，但仅接受能匹配到正式 `Person.TA_Lead = "Y"`
+人员节点的名称。三层均使用 snapshot 刷新时的当前人员组织归属，而不是 DID 历史完成时的
+组织快照。
 
 ## 用户输入
 
 页面要求：
 
-1. 输入 Group Lead 名称，例如 `Maggie`；
-2. 上传新 Delivery 的 TLF scope：
+1. 从可搜索下拉菜单选择 TA Lead；
+2. 从仅属于该 TA Lead 的可搜索下拉菜单选择 Group Lead，例如 `Maggie`；
+3. 上传新 Delivery 的 TLF scope：
    - 具有 `TLF` sheet 的 Excel workbook；或
    - 一个 TLF CSV。
 
@@ -29,9 +32,9 @@ TLF 使用以下列：
 ADaM/SDTM Data sheet 或 CSV 不再参与 DU recommendation；页面不计算、不展示
 ADaM/SDTM coverage 或 Missing ADaM/SDTM。
 
-输入 `Maggie` 时，程序只会从 snapshot 中真实存在的 `Group_Lead_Name` 候选中
-确定唯一匹配，例如 `Zhang, Maggie`。若没有匹配或有多个匹配，会提示用户输入更
-明确的名称，不会猜测或创建组织名称。
+页面从 snapshot 中列出真实 TA Lead；选择 TA Lead 后，Group Lead 下拉菜单仅显示其
+当前映射的 `Group_Lead_Name`。用户可输入几个字符过滤候选，但必须选择完整候选名称，
+不能猜测或创建组织名称。
 
 ## Snapshot 与刷新
 
@@ -44,12 +47,14 @@ py du_team_recommendation.py refresh-history
 生成的 `artifacts/du_team_history_snapshot.joblib` 包含：
 
 - DU Team Lead；
-- 该 DU 当前关联的 Group Lead 名称；
-- 该 DU 已完成 DID 的 TLF title/type/source 和实际完成日期；
+- 该 DU 当前成员的 TA Lead + Group Lead 成对组织映射；
+- 该 DU 成员实际负责 Generation 或 QC 的 completed-DID TLF
+  title/type/source 和实际完成日期；
 - 每个 DU 当前的 distinct Planned + Ongoing DID 数。
 
-推荐时首先以输入的 Group Lead 过滤 snapshot，只对该 Group 下的 DU 评分。旧版
-snapshot 未保存 Group Lead，无法安全支持过滤；升级代码后必须先运行一次
+推荐时先以输入的 TA Lead，再以其下的 Group Lead 过滤 snapshot，只对该组织路径下的
+DU 评分。旧版 snapshot 未保存 TA/Group 成对映射，无法安全支持级联过滤；升级代码后
+必须先运行一次
 `refresh-history` 生成新版 snapshot。
 
 在 Git LFS/RSC 部署中，如 checkout 只有 LFS pointer，程序会从 GitHub 下载完整
@@ -58,8 +63,10 @@ snapshot 到 RSC 服务端 artifact cache。可通过
 
 ## TLF coverage：可跨多个历史 DID 合并
 
-系统逐条处理上传的目标 TLF。每条 TLF 在该 DU 的 completed history 中寻找最佳
-有效历史匹配，标题 semantic match 必须达到 `>= 0.70`。
+系统逐条处理上传的目标 TLF。每条 TLF 只在该 DU 成员实际被记录为
+`HAS_TLF.Generation` 或 `HAS_TLF.QC` 的 completed-DID TLF 中寻找最佳有效历史
+匹配；仅参与同一 DID、但没有负责该表的成员不贡献 coverage。标题 semantic match
+必须达到 `>= 0.70`。
 
 标题先标准化，再使用 character 3–5 gram 向量相似度；Type 和 Source 在两边均有
 值且精确一致时作为辅助 metadata。每条目标 TLF 都必须实际匹配，不能只因同一

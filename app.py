@@ -500,8 +500,8 @@ def render_team_recommendation() -> None:
     """Render the upload-driven, read-only DU team scope-match workflow."""
     st.subheader("Recommend DU Team")
     st.caption(
-        "Enter a Group Lead, then upload a new Delivery's TLF scope. Recommendations "
-        "rank only DU teams currently under that Group Lead."
+        "Select a TA Lead, then a Group Lead, and upload a new Delivery's TLF scope. "
+        "Recommendations rank only DU teams currently under that organization path."
     )
     st.info(
         "Accepted input: an Excel workbook with a TLF sheet, or a TLF CSV. "
@@ -528,40 +528,61 @@ def render_team_recommendation() -> None:
         key="du_scope_primary",
     )
     try:
-        from du_team_recommendation import group_lead_candidates, load_history_snapshot
+        from du_team_recommendation import (
+            group_lead_candidates,
+            load_history_snapshot,
+            ta_lead_candidates,
+        )
 
         history_rows, _, _ = load_history_snapshot()
-        group_leads = group_lead_candidates(history_rows)
+        ta_leads = ta_lead_candidates(history_rows)
     except (RuntimeError, ValueError, FileNotFoundError) as exc:
         st.error(f"DU history snapshot is unavailable: {exc}")
         return
-    if not group_leads:
-        st.error("The DU history snapshot contains no Group Lead candidates.")
+    if not ta_leads:
+        st.error("The DU history snapshot contains no TA Lead / Group Lead candidates.")
         return
+    ta_lead_input = st.selectbox(
+        "TA Lead name",
+        options=ta_leads,
+        index=None,
+        placeholder="Type to search, then select a TA Lead",
+        help="The Group Lead choices are limited to the selected TA Lead.",
+        key="du_scope_ta_lead",
+    )
+    group_leads = group_lead_candidates(history_rows, ta_lead_input) if ta_lead_input else []
     group_lead_input = st.selectbox(
         "Group Lead name",
         options=group_leads,
         index=None,
-        placeholder="Type to search, then select a Group Lead",
-        help="Type a few characters to filter the current snapshot's Group Lead list.",
+        placeholder=(
+            "Select a TA Lead first"
+            if not ta_lead_input
+            else "Type to search, then select a Group Lead"
+        ),
+        disabled=not ta_lead_input,
+        help="Only Group Leads currently mapped to the selected TA Lead are shown.",
         key="du_scope_group_lead",
     )
     if not primary_file:
         return
     upload_key = (
+        ta_lead_input or "",
         group_lead_input or "",
         primary_file.name,
         len(primary_file.getvalue()),
     )
     if st.button("Recommend DU teams", type="primary", use_container_width=True):
-        if not group_lead_input:
-            st.error("Select a Group Lead from the searchable list.")
+        if not ta_lead_input or not group_lead_input:
+            st.error("Select a TA Lead and Group Lead from the searchable lists.")
             return
         try:
             from du_team_recommendation import recommend_uploaded_scope
 
             with st.spinner("Reading scope and comparing completed DU experience..."):
-                result = recommend_uploaded_scope(group_lead_input, primary_file)
+                result = recommend_uploaded_scope(
+                    ta_lead_input, group_lead_input, primary_file
+                )
             st.session_state.du_team_recommendation = result
             st.session_state.du_team_recommendation_input = upload_key
         except (RuntimeError, ValueError) as exc:
@@ -582,7 +603,9 @@ def render_team_recommendation() -> None:
         f"{snapshot['history_row_count']:,} completed DU-DID rows."
     )
     st.success(
-        f"Showing DU teams currently under Group Lead: {result['group_lead_name']}"
+        "Showing DU teams currently under "
+        f"TA Lead: {result['ta_lead_name']} · "
+        f"Group Lead: {result['group_lead_name']}"
     )
 
     recommendations = result["recommendations"]
