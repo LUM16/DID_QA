@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from datetime import date
 from pathlib import Path
 from unittest.mock import patch
 
@@ -17,6 +18,8 @@ from du_team_recommendation import (
     group_lead_candidates,
     load_history_snapshot,
     recommend_teams,
+    recommend_uploaded_scope,
+    recommendation_ta_lead_candidates,
     refresh_history_snapshot,
     resolve_group_lead_name,
     ta_lead_candidates,
@@ -263,6 +266,180 @@ class TeamRecommendationTests(unittest.TestCase):
                 [row["du_team"] for row in result["recommendations"]],
             ["TA One Team"],
         )
+
+    def test_recommendation_ta_choices_are_snapshot_backed_and_restricted(self) -> None:
+        history = [
+            {"organization_mappings": [{"ta_lead": name, "group_lead": "Group A"}]}
+            for name in ["Other TA", "Iyer, Priya Venkatesan", "Shen, Henry"]
+        ]
+        self.assertEqual(
+            recommendation_ta_lead_candidates(history),
+            ["Shen, Henry", "Iyer, Priya Venkatesan"],
+        )
+        self.assertEqual(
+            recommendation_ta_lead_candidates(history[:2]),
+            ["Iyer, Priya Venkatesan"],
+        )
+        self.assertEqual(recommendation_ta_lead_candidates([]), [])
+
+    def test_ta_only_ranking_compares_all_groups_and_scopes_workload(self) -> None:
+        scope = {"tlfs": [{"name": "AE Summary", "type": "T", "source": "ADAE"}]}
+        history = [
+            {
+                "du_team": team,
+                "did": f"DID-{index}",
+                "completion_date": date.today().isoformat(),
+                "group_leads": [group],
+                "organization_mappings": [{"ta_lead": ta, "group_lead": group}],
+                "tlfs": scope["tlfs"],
+            }
+            for index, (team, ta, group) in enumerate([
+                ("Henry A", "Shen, Henry", "Shared Group"),
+                ("Henry B", "Shen, Henry", "Group B"),
+                ("Henry C", "Shen, Henry", "Group C"),
+                ("Henry D", "Shen, Henry", "Group D"),
+                ("Priya A", "Iyer, Priya Venkatesan", "Shared Group"),
+                ("Other A", "Other TA", "Group B"),
+            ])
+        ]
+        workload = [
+            {"du_team": row["du_team"], "active_did_count": index + 1}
+            for index, row in enumerate(history[:4])
+        ] + [
+            {"du_team": "Priya A", "active_did_count": 1000},
+            {"du_team": "Other A", "active_did_count": 2000},
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            cache_path = Path(directory) / "similarity.joblib"
+            henry = recommend_teams(
+                scope, history, workload, cache_path, top_n=10,
+                ta_lead_name="Shen, Henry",
+            )
+            priya = recommend_teams(
+                scope, history, workload, cache_path,
+                ta_lead_name="Iyer, Priya Venkatesan",
+            )
+            without_other_tas = recommend_teams(
+                scope, history[:4], workload[:4], cache_path, top_n=10,
+                ta_lead_name="Shen, Henry",
+            )
+        self.assertEqual(henry["candidate_team_count"], 4)
+        self.assertIsNone(henry["group_lead_name"])
+        self.assertEqual(
+            [row["du_team"] for row in henry["recommendations"]],
+            ["Henry A", "Henry B", "Henry C", "Henry D"],
+        )
+        self.assertEqual(
+            [row["group_leads"] for row in henry["recommendations"]],
+            [["Shared Group"], ["Group B"], ["Group C"], ["Group D"]],
+        )
+        self.assertEqual(
+            henry["recommendations"], without_other_tas["recommendations"]
+        )
+        self.assertAlmostEqual(henry["recommendations"][0]["score"], 85.5)
+        self.assertAlmostEqual(henry["recommendations"][-1]["score"], 59.2)
+        self.assertEqual(
+            [row["du_team"] for row in priya["recommendations"]], ["Priya A"]
+        )
+
+    def test_uploaded_scope_no_longer_requires_a_group_lead(self) -> None:
+        history = [{
+            "organization_mappings": [
+                {"ta_lead": "Shen, Henry", "group_lead": "Group A"}
+            ]
+        }]
+        upload = object()
+        scope = {"tlfs": [{"name": "AE Summary"}]}
+        with (
+            patch("du_team_recommendation.load_history_snapshot",
+                  return_value=(history, [], {"generated_at": "test"})),
+            patch("du_team_recommendation.load_uploaded_scope",
+                  return_value=scope) as loader,
+            patch("du_team_recommendation.recommend_teams",
+                  return_value={}) as ranker,
+        ):
+            result = recommend_uploaded_scope("Shen, Henry", upload)
+        loader.assert_called_once_with(upload, None, require_data=False)
+        ranker.assert_called_once_with(
+            scope, history, [], ta_lead_name="Shen, Henry"
+        )
+        self.assertEqual(result["history_snapshot"], {"generated_at": "test"})
+
+    def test_uploaded_scope_rejects_unsupported_or_unavailable_ta(self) -> None:
+        with (
+            patch("du_team_recommendation.load_history_snapshot",
+                  return_value=([], [], {})),
+            patch("du_team_recommendation.load_uploaded_scope") as loader,
+        ):
+            for name in ["Other TA", "Shen, Henry", "Iyer, Priya Venkatesan"]:
+                with self.subTest(name=name):
+                    with self.assertRaisesRegex(ValueError, "Select Henry or Priya"):
+                        recommend_uploaded_scope(name, object())
+        loader.assert_not_called()
+
+    def test_team_tab_has_one_ta_selector_and_ranks_across_groups(self) -> None:
+        from streamlit.testing.v1 import AppTest
+
+        history = [
+            {
+                "du_team": team, "did": team,
+                "completion_date": date.today().isoformat(),
+                "group_leads": [group],
+                "organization_mappings": [{"ta_lead": ta, "group_lead": group}],
+                "tlfs": [{"name": "AE Summary", "type": "T", "source": "ADAE"}],
+            }
+            for team, ta, group in [
+                ("Team A", "Shen, Henry", "Group A"),
+                ("Team B", "Shen, Henry", "Group B"),
+                ("Team C", "Iyer, Priya Venkatesan", "Group C"),
+            ]
+        ]
+        snapshot = {"generated_at": "test", "history_row_count": 3}
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch("du_team_recommendation.load_history_snapshot",
+                  return_value=(history, [], snapshot)),
+            patch("du_team_recommendation._resolve_recommendation_cache_path",
+                  return_value=Path(directory) / "similarity.joblib"),
+            patch("neo4j_client.connection_summary", return_value="test"),
+        ):
+            app = AppTest.from_file(
+                str(Path(__file__).with_name("app.py")), default_timeout=30
+            ).run()
+            self.assertFalse(app.exception)
+            self.assertEqual(app.tabs[1].label, "Recommend Team")
+            self.assertEqual(
+                app.selectbox(key="du_scope_ta_lead").options,
+                ["Shen, Henry", "Iyer, Priya Venkatesan"],
+            )
+            self.assertFalse(any(
+                selector.label == "Group Lead name" for selector in app.selectbox
+            ))
+            app.file_uploader(key="du_scope_primary").set_value((
+                "scope.csv",
+                b"Title,Type,Source Datasets\nAE Summary,T,ADAE\n",
+                "text/csv",
+            )).run()
+            for ta, expected in [
+                ("Shen, Henry", {"Team A", "Team B"}),
+                ("Iyer, Priya Venkatesan", {"Team C"}),
+            ]:
+                app.selectbox(key="du_scope_ta_lead").select(ta).run()
+                self.assertFalse(app.success)
+                next(
+                    button for button in app.button
+                    if button.label == "Recommend teams"
+                ).click().run()
+                self.assertFalse(app.exception)
+                self.assertFalse(app.error)
+                result = app.session_state["du_team_recommendation"]
+                self.assertEqual(
+                    {row["du_team"] for row in result["recommendations"]}, expected
+                )
+                for element in app.tabs[1]:
+                    value = getattr(element, "value", None)
+                    if isinstance(value, str):
+                        self.assertNotIn("DU", value)
 
 
 if __name__ == "__main__":

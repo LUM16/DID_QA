@@ -86,6 +86,7 @@ RETURN p.Team_Lead_Name AS du_team,
 """
 
 SEMANTIC_DID_CANDIDATE_LIMIT = 50
+RECOMMENDATION_TA_LEADS = ("Shen, Henry", "Iyer, Priya Venkatesan")
 DU_HISTORY_SNAPSHOT_VERSION = "du-team-history-v4-ta-group-hierarchy"
 DEFAULT_DU_HISTORY_SNAPSHOT_PATH = (
     Path(__file__).resolve().parent / "artifacts" / "du_team_history_snapshot.joblib"
@@ -176,7 +177,7 @@ def load_history_snapshot(
     path = _resolve_history_snapshot_path(snapshot_path or _history_snapshot_path())
     if not path.exists():
         raise FileNotFoundError(
-            f"DU history snapshot is unavailable: {path.resolve()}. "
+            f"Team history snapshot is unavailable: {path.resolve()}. "
             "Run `python du_team_recommendation.py refresh-history` after Neo4j updates."
         )
     snapshot = joblib.load(path)
@@ -187,7 +188,7 @@ def load_history_snapshot(
         or not isinstance(snapshot.get("workload_rows"), list)
         or not isinstance(snapshot.get("generated_at"), str)
     ):
-        raise ValueError(f"Invalid DU history snapshot: {path.resolve()}")
+        raise ValueError(f"Invalid team history snapshot: {path.resolve()}")
     return (
         snapshot["history_rows"],
         snapshot["workload_rows"],
@@ -290,6 +291,14 @@ def ta_lead_candidates(history_rows: Iterable[dict[str, Any]]) -> list[str]:
         },
         key=str.casefold,
     )
+
+
+def recommendation_ta_lead_candidates(
+    history_rows: Iterable[dict[str, Any]],
+) -> list[str]:
+    """Limit the recommendation workflow to supported, snapshot-backed TA Leads."""
+    available = set(ta_lead_candidates(history_rows))
+    return [name for name in RECOMMENDATION_TA_LEADS if name in available]
 
 
 def group_lead_candidates(
@@ -496,7 +505,7 @@ def recommend_teams(
     group_lead_name: str | None = None,
     ta_lead_name: str | None = None,
 ) -> dict[str, Any]:
-    """Rank current DU teams from completed Delivery scope and active workload."""
+    """Rank current teams across a TA Lead's groups, or an optional specific group."""
     resolved_cache_path = _resolve_recommendation_cache_path(cache_path)
     target = {"tlfs": _unique_items(scope.get("tlfs", [])), "adams": [], "sdtms": []}
     if not target["tlfs"]:
@@ -513,7 +522,10 @@ def recommend_teams(
         organization_mappings = _organization_mappings(row)
         has_selected_hierarchy = any(
             mapping["ta_lead"] == ta_lead_name
-            and mapping["group_lead"] == group_lead_name
+            and (
+                group_lead_name is None
+                or mapping["group_lead"] == group_lead_name
+            )
             for mapping in organization_mappings
         )
         if (
@@ -533,14 +545,16 @@ def recommend_teams(
             "tlfs": _unique_items(row.get("tlfs") or []),
         }
     if not by_team:
-        raise ValueError("Neo4j returned no completed DU team history.")
+        raise ValueError("No completed team history is available for the selected scope.")
 
     workload = {
         str(row["du_team"]): int(row.get("active_did_count") or 0)
         for row in workload_rows
         if row.get("du_team")
     }
-    maximum_workload = max(workload.values(), default=0)
+    maximum_workload = max(
+        (workload.get(team, 0) for team in by_team), default=0
+    )
     cache = _load_similarity_cache(resolved_cache_path)
     recommendations = []
     for team, histories in by_team.items():
@@ -601,6 +615,15 @@ def recommend_teams(
         recommendations.append(
             {
                 "du_team": team,
+                "group_leads": sorted(
+                    {
+                        mapping["group_lead"]
+                        for record in history
+                        for mapping in record["organization_mappings"]
+                        if ta_lead_name is None or mapping["ta_lead"] == ta_lead_name
+                    },
+                    key=str.casefold,
+                ),
                 "score": round(score, 1),
                 "tlf_semantic_coverage": round(tlf_coverage, 3),
                 "tlf_coverage_evidence": tlf_coverage_evidence,
@@ -627,6 +650,7 @@ def recommend_teams(
         "target_counts": {"tlfs": len(target["tlfs"])},
         "ta_lead_name": ta_lead_name,
         "group_lead_name": group_lead_name,
+        "candidate_team_count": len(by_team),
         "recommendations": recommendations[:top_n],
         "cache": {
             "hits": cache["hits"],
@@ -638,23 +662,19 @@ def recommend_teams(
 
 def recommend_uploaded_scope(
     ta_lead_name: str,
-    group_lead_name: str,
     primary_file: Any,
     data_csv_file: Any | None = None,
 ) -> dict[str, Any]:
-    """Load an uploaded scope and rank it against the locally cached DU history."""
+    """Rank an uploaded scope across all groups of a supported TA Lead."""
     history_rows, workload_rows, snapshot = load_history_snapshot()
-    if ta_lead_name not in ta_lead_candidates(history_rows):
-        raise ValueError("Select a TA Lead from the current DU history snapshot.")
-    if group_lead_name not in group_lead_candidates(history_rows, ta_lead_name):
+    if ta_lead_name not in recommendation_ta_lead_candidates(history_rows):
         raise ValueError(
-            "Select a Group Lead that belongs to the selected TA Lead in the current DU history snapshot."
+            "Select Henry or Priya from the TA Lead choices in the current team history snapshot."
         )
     result = recommend_teams(
         load_uploaded_scope(primary_file, data_csv_file, require_data=False),
         history_rows,
         workload_rows,
-        group_lead_name=group_lead_name,
         ta_lead_name=ta_lead_name,
     )
     result["history_snapshot"] = snapshot

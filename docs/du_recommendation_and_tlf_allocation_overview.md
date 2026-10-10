@@ -8,8 +8,8 @@
 新 Delivery 的 TLF scope
         |
         v
-第 1 层：Recommend DU Team
-在指定 TA Lead → Group Lead 路径下，选择最合适且当前负担较低的 DU Team
+第 1 层：Recommend Team
+选择 Henry 或 Priya，跨其下所有 Group 比较团队
         |
         v
 第 2 层：Allocate TLF People
@@ -29,7 +29,7 @@ TLF 经验、当前 active DID 负担和明确的规则。
 
 | 决策层级 | 功能 | 要回答的问题 | 推荐对象 |
 | --- | --- | --- | --- |
-| 团队层级 | **Recommend DU Team** | 在这个 TA Lead → Group Lead 组织范围内，哪个 DU 最适合接手这份新 Delivery？ | DU Team / Team Lead |
+| 团队层级 | **Recommend Team** | 在所选 TA Lead 下跨 Group 比较，哪个团队最适合接手这份新 Delivery？ | Team / Team Lead |
 | 人员层级 | **Allocate TLF People** | 在已经确定的 DU 内，谁应负责每条 TLF 的 Generation 和 QC？ | Person |
 
 两者不能互相替代：
@@ -115,11 +115,11 @@ py tlf_person_allocation.py refresh-snapshot
 
 ---
 
-## 3. 第一层：Recommend DU Team
+## 3. 第一层：Recommend Team
 
 ### 3.1 目的
 
-在用户指定的 TA Lead 和 Group Lead 管辖范围内，根据新 Delivery 的 TLF scope，对多个 DU Team
+在用户指定的 TA Lead 管辖范围内跨 Group，根据新 Delivery 的 TLF scope，对所有合格团队
 进行排序，找出：
 
 ```text
@@ -133,9 +133,8 @@ py tlf_person_allocation.py refresh-snapshot
 
 ### 3.2 用户输入
 
-1. 从可搜索下拉菜单选择 TA Lead；
-2. 从仅显示该 TA Lead 下候选的可搜索下拉菜单选择 Group Lead，例如 `Maggie`；
-3. 新 Delivery 的 TLF scope：
+1. 从可搜索下拉菜单选择 `Shen, Henry` 或 `Iyer, Priya Venkatesan`；
+2. 新 Delivery 的 TLF scope：
    - 带 `TLF` sheet 的 Excel；或
    - 单个 TLF CSV。
 
@@ -147,9 +146,9 @@ Type
 Source Datasets
 ```
 
-TA Lead 和 Group Lead 均来自 snapshot 中当前人员组织归属。选择 TA Lead 后，Group
-Lead 下拉菜单只显示实际映射到该 TA Lead 的完整候选；用户可输入几个字符搜索，但必须
-从候选中选择，不能猜测组织名称。
+TA Lead 候选必须在 snapshot 中存在真实成员级组织映射。页面只开放 Henry / Priya，
+不再提供 Group Lead 输入；其下所有 Group 的合格团队统一排名，默认展示前三名。
+Group Lead 仅在结果中作为归属信息展示。现有 v4 snapshot 可直接复用。
 
 本功能当前**不使用** ADaM/SDTM coverage，也不会显示 Missing ADaM/SDTM。
 
@@ -195,16 +194,17 @@ DU score =
 工作负担分数公式：
 
 ```text
-35 x (1 - selected DU active DID count / selected Group maximum active DID count)
+35 x (1 - team active DID count / selected TA eligible-team maximum active DID count)
 ```
 
+归一化仅使用所选 TA 下的合格候选团队，不受其他 TA 的工作负担影响。
 这是一项相对负担指标，而不是 FTE capacity、休假、优先级或剩余工时的精确替代。
 
 ### 3.5 输出与审核
 
 结果页面显示：
 
-- 所选 TA Lead、Group Lead 路径下的 DU 排名、总分和 recommendation level；
+- 所选 TA Lead 下跨 Group 的团队排名、Group Lead 归属、总分和 recommendation level；
 - TLF coverage；
 - 当前 active DID 数；
 - 最相似 completed DID；
@@ -372,7 +372,7 @@ primary/backup 分列，便于 Lead review、会议讨论和后续操作。
 
 ```text
 1. 准备新 Delivery 的 TLF scope
-2. 在 Recommend DU Team 选择 TA Lead → Group Lead，并上传 TLF scope
+2. 在 Recommend Team 选择 Henry 或 Priya，并上传 TLF scope
 3. 审核排序、TLF coverage evidence 和 current workload
 4. 确认一个 DU Team
 5. 在 Allocate TLF People 输入该 Team Lead + TLF/Data scope
@@ -388,14 +388,14 @@ primary/backup 分列，便于 Lead review、会议讨论和后续操作。
 ### 场景
 
 ```text
-某 Group 获得一份新 Delivery，需要在多个 DU 中选择团队，
+某 TA 获得一份新 Delivery，需要跨其下多个 Group 选择团队，
 并为其中每条 TLF 指定 Generation 和 QC 人员。
 ```
 
 ### 演示顺序
 
-1. **展示输入**：TA Lead → Group Lead 和新 Delivery 的 TLF scope；
-2. **展示 DU 推荐**：排名、TLF coverage、similar completed DID、active DID workload；
+1. **展示输入**：Henry 或 Priya，以及新 Delivery 的 TLF scope；
+2. **展示团队推荐**：跨 Group 排名、TLF coverage、similar completed DID、active DID workload；
 3. **解释可审计性**：每个目标 TLF 都显示实际 Gen/QC-owned evidence DID；
 4. **确认一个 DU**：说明这是 Lead 的业务决策，而非系统自动派工；
 5. **展示人员 allocation**：Gen/QC primary、backups、评分和历史 evidence；
@@ -405,7 +405,7 @@ primary/backup 分列，便于 Lead review、会议讨论和后续操作。
 
 ### 可直接用于汇报的总结
 
-> 系统先在指定 TA Lead → Group Lead 组织路径内选择具有真实、已交付 TLF 经验且相对有容量的 DU，再在该 DU
+> 系统先在指定 TA Lead 下跨 Group 选择具有真实、已交付 TLF 经验且相对有容量的团队，再在该团队
 > 内按每条 TLF 的实际 Gen/QC 历史经验推荐人员。推荐过程保留 TLF 级 evidence、工作
 > 负担、评分和审核提示，帮助 Lead 更快地做出一致且可追溯的资源决策；最终人员安排仍由
 > 业务负责人确认。

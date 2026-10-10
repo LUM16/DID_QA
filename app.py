@@ -497,11 +497,11 @@ def complete_pending_turn() -> None:
 
 
 def render_team_recommendation() -> None:
-    """Render the upload-driven, read-only DU team scope-match workflow."""
-    st.subheader("Recommend DU Team")
+    """Render the upload-driven, read-only team scope-match workflow."""
+    st.subheader("Recommend Team")
     st.caption(
-        "Select a TA Lead, then a Group Lead, and upload a new Delivery's TLF scope. "
-        "Recommendations rank only DU teams currently under that organization path."
+        "Select Henry or Priya as TA Lead and upload a new Delivery's TLF scope. "
+        "Recommendations compare teams across all groups under the selected TA Lead."
     )
     st.info(
         "Accepted input: an Excel workbook with a TLF sheet, or a TLF CSV. "
@@ -521,7 +521,7 @@ def render_team_recommendation() -> None:
             use_container_width=True,
         )
     else:
-        st.warning("The bundled DU recommendation example input is unavailable.")
+        st.warning("The bundled team recommendation example input is unavailable.")
     primary_file = st.file_uploader(
         "Delivery TLF workbook or CSV",
         type=["xlsx", "csv"],
@@ -529,59 +529,53 @@ def render_team_recommendation() -> None:
     )
     try:
         from du_team_recommendation import (
-            group_lead_candidates,
+            RECOMMENDATION_TA_LEADS,
             load_history_snapshot,
-            ta_lead_candidates,
+            recommendation_ta_lead_candidates,
         )
 
         history_rows, _, _ = load_history_snapshot()
-        ta_leads = ta_lead_candidates(history_rows)
+        ta_leads = recommendation_ta_lead_candidates(history_rows)
     except (RuntimeError, ValueError, FileNotFoundError) as exc:
-        st.error(f"DU history snapshot is unavailable: {exc}")
+        st.error(f"Team history snapshot is unavailable: {exc}")
         return
     if not ta_leads:
-        st.error("The DU history snapshot contains no TA Lead / Group Lead candidates.")
+        st.error("The team history snapshot contains no team mappings for Henry or Priya.")
         return
+    missing_ta_leads = [
+        name for name in RECOMMENDATION_TA_LEADS
+        if name not in ta_leads
+    ]
+    if missing_ta_leads:
+        st.warning(
+            "No team mappings are available in the current snapshot for: "
+            + ", ".join(missing_ta_leads)
+        )
     ta_lead_input = st.selectbox(
         "TA Lead name",
         options=ta_leads,
         index=None,
         placeholder="Type to search, then select a TA Lead",
-        help="The Group Lead choices are limited to the selected TA Lead.",
+        help="Compare all eligible teams across the selected TA Lead's groups.",
         key="du_scope_ta_lead",
-    )
-    group_leads = group_lead_candidates(history_rows, ta_lead_input) if ta_lead_input else []
-    group_lead_input = st.selectbox(
-        "Group Lead name",
-        options=group_leads,
-        index=None,
-        placeholder=(
-            "Select a TA Lead first"
-            if not ta_lead_input
-            else "Type to search, then select a Group Lead"
-        ),
-        disabled=not ta_lead_input,
-        help="Only Group Leads currently mapped to the selected TA Lead are shown.",
-        key="du_scope_group_lead",
     )
     if not primary_file:
         return
     upload_key = (
         ta_lead_input or "",
-        group_lead_input or "",
         primary_file.name,
         len(primary_file.getvalue()),
     )
-    if st.button("Recommend DU teams", type="primary", use_container_width=True):
-        if not ta_lead_input or not group_lead_input:
-            st.error("Select a TA Lead and Group Lead from the searchable lists.")
+    if st.button("Recommend teams", type="primary", use_container_width=True):
+        if not ta_lead_input:
+            st.error("Select a TA Lead from the searchable list.")
             return
         try:
             from du_team_recommendation import recommend_uploaded_scope
 
-            with st.spinner("Reading scope and comparing completed DU experience..."):
+            with st.spinner("Reading scope and comparing completed team experience..."):
                 result = recommend_uploaded_scope(
-                    ta_lead_input, group_lead_input, primary_file
+                    ta_lead_input, primary_file
                 )
             st.session_state.du_team_recommendation = result
             st.session_state.du_team_recommendation_input = upload_key
@@ -589,7 +583,7 @@ def render_team_recommendation() -> None:
             st.error(str(exc))
             return
         except Exception as exc:  # noqa: BLE001
-            st.error(f"DU team recommendation failed: {exc}")
+            st.error(f"Team recommendation failed: {exc}")
             return
 
     result = st.session_state.get("du_team_recommendation")
@@ -599,25 +593,25 @@ def render_team_recommendation() -> None:
     st.metric("Target TLFs", counts["tlfs"])
     snapshot = result["history_snapshot"]
     st.caption(
-        f"DU history snapshot: {snapshot['generated_at']} · "
-        f"{snapshot['history_row_count']:,} completed DU-DID rows."
+        f"Team history snapshot: {snapshot['generated_at']} · "
+        f"{snapshot['history_row_count']:,} completed team-DID rows."
     )
     st.success(
-        "Showing DU teams currently under "
+        "Comparing teams across all groups under "
         f"TA Lead: {result['ta_lead_name']} · "
-        f"Group Lead: {result['group_lead_name']}"
+        f"{result['candidate_team_count']} eligible teams; showing the top recommendations."
     )
 
     recommendations = result["recommendations"]
     if not recommendations:
-        st.warning("No DU team recommendations were produced from the available history.")
+        st.warning("No team recommendations were produced from the available history.")
         return
     st.bar_chart(
         [
-            {"du_team": row["du_team"], "score": row["score"]}
+            {"Team": row["du_team"], "score": row["score"]}
             for row in recommendations
         ],
-        x="du_team",
+        x="Team",
         y="score",
         horizontal=True,
     )
@@ -632,6 +626,7 @@ def render_team_recommendation() -> None:
         st.dataframe(
             [
                 {
+                    "Group Lead": ", ".join(row["group_leads"]),
                     "TLF semantic coverage": f"{row['tlf_semantic_coverage']:.1%}",
                     "Similar DID >= 70%": row["similar_did_count_ge_70"],
                     "Similar DID >= 85%": row["similar_did_count_ge_85"],
@@ -881,7 +876,7 @@ with st.sidebar:
         st.caption("Example library unavailable.")
 
 chat_tab, team_tab, allocation_tab = st.tabs(
-    ["Ask Neo4j", "Recommend DU Team", "Allocate TLF People"]
+    ["Ask Neo4j", "Recommend Team", "Allocate TLF People"]
 )
 
 with chat_tab:
