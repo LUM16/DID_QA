@@ -402,6 +402,8 @@ class TeamRecommendationTests(unittest.TestCase):
             patch("du_team_recommendation._resolve_recommendation_cache_path",
                   return_value=Path(directory) / "similarity.joblib"),
             patch("neo4j_client.connection_summary", return_value="test"),
+            patch("tlf_person_allocation.load_person_tlf_snapshot",
+                  return_value=([{"team_lead_name": "Team A"}], [], {})),
         ):
             app = AppTest.from_file(
                 str(Path(__file__).with_name("app.py")), default_timeout=30

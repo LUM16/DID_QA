@@ -238,7 +238,7 @@ DU score =
 
 ### 4.2 用户输入
 
-1. DU Team Lead 名称；
+1. 从可搜索下拉菜单明确选择完整 Team Lead 名称；
 2. 新 Delivery 的 scope：
    - 带 `TLF` 和 `Data` sheet 的 Excel；或
    - 一份 TLF CSV 和一份 Data CSV。
@@ -375,7 +375,7 @@ primary/backup 分列，便于 Lead review、会议讨论和后续操作。
 2. 在 Recommend Team 选择 Henry 或 Priya，并上传 TLF scope
 3. 审核排序、TLF coverage evidence 和 current workload
 4. 确认一个 DU Team
-5. 在 Allocate TLF People 输入该 Team Lead + TLF/Data scope
+5. 在 Allocate TLF People 搜索并选择该 Team Lead，上传 TLF/Data scope
 6. 审核 Gen/QC primary、backup、group 连续性和 review flags
 7. Lead 结合技能、availability、priority、休假和培训状态作最终决定
 8. 在正式业务系统中执行人员分配

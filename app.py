@@ -677,8 +677,9 @@ def render_tlf_person_allocation() -> None:
     """Render snapshot-only Generation/QC allocation for uploaded TLFs."""
     st.subheader("Allocate TLF People")
     st.caption(
-        "Match a DU Team Lead to the manually refreshed snapshot, then recommend "
-        "Generation and QC people from completed TLF role evidence. This tab never queries Neo4j."
+        "Select a Team Lead from the searchable snapshot list, then recommend "
+        "Generation and QC people from completed TLF role evidence. "
+        "This tab never queries Neo4j or calls an LLM."
     )
     st.info(
         "Primary balancing: each prior primary allocation reduces that person's next "
@@ -694,9 +695,23 @@ def render_tlf_person_allocation() -> None:
             use_container_width=True,
             key="tlf_allocation_example",
         )
-    team_lead_input = st.text_input(
-        "DU Team Lead name",
-        placeholder="Enter the Team Lead name to match against the snapshot",
+    try:
+        from tlf_person_allocation import load_person_tlf_snapshot, team_lead_candidates
+
+        history_rows, _, _ = load_person_tlf_snapshot()
+        team_leads = team_lead_candidates(history_rows)
+    except (RuntimeError, ValueError, FileNotFoundError) as exc:
+        st.error(f"TLF person-allocation snapshot is unavailable: {exc}")
+        return
+    if not team_leads:
+        st.error("The allocation snapshot contains no Team Lead candidates.")
+        return
+    team_lead_input = st.selectbox(
+        "Team Lead name",
+        options=team_leads,
+        index=None,
+        placeholder="Type to search, then select a Team Lead",
+        help="Select a complete name from the current allocation snapshot; no LLM matching is used.",
         key="tlf_allocation_team_lead",
     )
     primary_file = st.file_uploader(
@@ -712,15 +727,15 @@ def render_tlf_person_allocation() -> None:
     if not primary_file:
         return
     upload_key = (
-        team_lead_input.strip(),
+        team_lead_input or "",
         primary_file.name,
         len(primary_file.getvalue()),
         data_csv_file.name if data_csv_file else "",
         len(data_csv_file.getvalue()) if data_csv_file else 0,
     )
     if st.button("Allocate TLF people", type="primary", use_container_width=True):
-        if not team_lead_input.strip():
-            st.error("Enter a DU Team Lead name.")
+        if not team_lead_input:
+            st.error("Select a Team Lead from the searchable list.")
             return
         try:
             from tlf_person_allocation import allocate_uploaded_tlfs
@@ -746,8 +761,8 @@ def render_tlf_person_allocation() -> None:
         f"Person × DID × TLF role-evidence rows."
     )
     st.success(
-        f"LLM Team Lead match: {result['team_match']['team_lead_name']} "
-        "(strictly validated against snapshot candidates)."
+        f"Selected Team Lead: {result['team_match']['team_lead_name']} "
+        "(validated against snapshot candidates; no LLM used)."
     )
     from tlf_person_allocation import allocation_excel_bytes
 
