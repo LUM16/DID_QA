@@ -176,6 +176,8 @@ def ensure_state() -> None:
         st.session_state.copilot_token_lookup_error = ""
     if "copilot_token_lookup_status" not in st.session_state:
         st.session_state.copilot_token_lookup_status = ""
+    if "copilot_auto_connect_attempted_ntid" not in st.session_state:
+        st.session_state.copilot_auto_connect_attempted_ntid = ""
     if not st.session_state.copilot_ntid:
         headers = getattr(getattr(st, "context", None), "headers", {})
         ntid = current_ntid(headers)
@@ -184,12 +186,18 @@ def ensure_state() -> None:
 
 
 def resolve_rsc_ntid() -> None:
-    if st.session_state.copilot_ntid:
-        return
     ntid = rsc_ntid()
-    if ntid:
-        st.session_state.copilot_ntid = normalize_ntid(ntid)
-        st.rerun()
+    if not ntid:
+        return
+    normalized_ntid = normalize_ntid(ntid)
+    if not st.session_state.copilot_ntid:
+        st.session_state.copilot_ntid = normalized_ntid
+    if st.session_state.copilot_auto_connect_attempted_ntid == normalized_ntid:
+        return
+    st.session_state.copilot_auto_connect_attempted_ntid = normalized_ntid
+    st.session_state.copilot_ntid_input = normalized_ntid
+    load_saved_copilot_token()
+    st.rerun()
 
 
 def load_saved_copilot_token() -> None:

@@ -9,6 +9,7 @@ import hashlib
 import logging
 import os
 from pathlib import Path
+import re
 import tempfile
 import time
 from typing import Any, Iterator
@@ -149,6 +150,15 @@ def _copilot_base_directory(github_token: str) -> str:
     return str(directory)
 
 
+def _copilot_error_detail(exc: Exception, github_token: str) -> str:
+    """Return actionable SDK failure text while keeping credentials out of the UI."""
+    detail = str(exc).replace(github_token, "[redacted]")
+    detail = re.sub(r"\b(?:github_pat|ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]+\b", "[redacted]", detail)
+    detail = re.sub(r"(?i)(authorization:\s*bearer\s+)[^\s]+", r"\1[redacted]", detail)
+    detail = " ".join(detail.split())[:500]
+    return detail or type(exc).__name__
+
+
 async def _chat_with_github_copilot(system: str, user: str, github_token: str) -> str:
     from copilot import CopilotClient
 
@@ -183,7 +193,8 @@ def chat(system: str, user: str, temperature: float = 0.1) -> tuple[str, dict[st
         except Exception as exc:
             logger.exception("GitHub Copilot SDK request failed: %s", type(exc).__name__)
             raise RuntimeError(
-                "GitHub Copilot request failed. Verify the saved token and Copilot access."
+                "GitHub Copilot request failed: "
+                f"{_copilot_error_detail(exc, str(github_token))}"
             ) from exc
 
     client, model = build_llm_client()
