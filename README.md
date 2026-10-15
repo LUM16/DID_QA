@@ -37,6 +37,15 @@ py -m streamlit run app.py
 
 Open http://127.0.0.1:8501
 
+### Posit Connect identity for GitHub Copilot
+
+When deployed on Posit Connect, the app uses the active request's host to call
+the same-origin Connect current-user endpoint, `__api__/me`. It forwards the
+current request's RSC session and XSRF cookies, reads its `username` as the NTID,
+and uses it as the key for GitHub Copilot Token Vault save and retrieval. Local
+runs without an RSC session simply do not resolve an NTID. Set
+`POSIT_CONNECT_ME_URL` only when the automatic URL needs an explicit override.
+
 ## DID effort prediction
 
 The project includes a read-only Neo4j-to-model pipeline for forecasting the
@@ -258,6 +267,9 @@ Do **not** rely on uploading `.env` in production. Set Connect **Vars**:
 - `VOX_CLIENT_ID` = *(secret)*
 - `VOX_CLIENT_SECRET` = *(secret)*
 - `VOX_MODEL` = `gpt-4o`
+- `COPILOT_MODEL` = `auto` *(optional; used only when a user selects GitHub Copilot)*
+- `GITHUB_TOKEN_VAULT_URL` = `http://10.109.2.165:7001/api/github-token-vault`
+- `GITHUB_TOKEN_VAULT_ACCESS_KEY` = *(secret; required to save or retrieve user GitHub Copilot tokens)*
 
 `.rscignore` excludes `.env` from CLI publishes — set the **Vars** above on Connect.
 For local testing, keep secrets in `rsc-app/.env` (already gitignored).
@@ -271,10 +283,14 @@ From the **Connect server**, these must be reachable:
 3. Vox API: `https://mule4api-comm-amer.pfizer.com`
 4. GitHub artifact URL: `https://media.githubusercontent.com` (needed on the
    first effort-prediction request when RSC did not fetch Git LFS objects)
+5. GitHub Token Vault: `10.109.2.165:7001` (needed only for GitHub Copilot)
 
 If schema load fails after publish, it is almost always firewall / routing between RSC and Neo4j.
 
 ## Security
 
 - Prefer Connect Vars for passwords and client secrets.
+- GitHub Copilot tokens are entered by each user in the app, stored only in the
+  Token Vault, and read only for the active request. Do not put a user token in
+  `.env`, Connect Vars, source code, or logs.
 - Rotate credentials after testing if they were shared in chat or committed by mistake.

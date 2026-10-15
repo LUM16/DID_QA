@@ -2,12 +2,20 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Iterator
 
 import streamlit as st
 
+from github_token_vault import (
+    normalize_ntid,
+    retrieve_copilot_token,
+    save_copilot_token,
+)
 from neo4j_client import connection_summary, get_schema, load_env
-from vox_client import add_usage, empty_usage
+from posit_connect_identity import current_ntid
+from vox_client import add_usage, empty_usage, use_llm_provider
 
 APP_NAME = "DID Insight"
 APP_TAGLINE = "Graph intelligence and resource forecasting"
@@ -155,6 +163,51 @@ def ensure_state() -> None:
         st.session_state.token_usage = empty_usage()
     if "query_history" not in st.session_state:
         st.session_state.query_history = []
+    if "llm_provider" not in st.session_state:
+        st.session_state.llm_provider = "vox"
+    if "llm_provider_label" not in st.session_state:
+        st.session_state.llm_provider_label = "Vox"
+    if "copilot_ntid" not in st.session_state:
+        st.session_state.copilot_ntid = ""
+    if "copilot_connected_ntid" not in st.session_state:
+        st.session_state.copilot_connected_ntid = ""
+    if "copilot_token_lookup_error" not in st.session_state:
+        st.session_state.copilot_token_lookup_error = ""
+    if "copilot_token_lookup_status" not in st.session_state:
+        st.session_state.copilot_token_lookup_status = ""
+    if not st.session_state.copilot_ntid:
+        headers = getattr(getattr(st, "context", None), "headers", {})
+        ntid = current_ntid(headers)
+        if ntid:
+            st.session_state.copilot_ntid = normalize_ntid(ntid)
+
+
+def load_saved_copilot_token() -> None:
+    """Connect the current browser session when its entered NTID has a saved token."""
+    try:
+        ntid = normalize_ntid(st.session_state.copilot_ntid_input)
+        retrieve_copilot_token(ntid)
+        st.session_state.copilot_ntid = ntid
+        st.session_state.copilot_connected_ntid = ntid
+        st.session_state.copilot_token_lookup_error = ""
+        st.session_state.copilot_token_lookup_status = "Saved GitHub Copilot token loaded."
+    except (RuntimeError, ValueError) as exc:
+        st.session_state.copilot_connected_ntid = ""
+        st.session_state.copilot_token_lookup_error = str(exc)
+        st.session_state.copilot_token_lookup_status = ""
+
+
+@contextmanager
+def active_llm_provider() -> Iterator[None]:
+    provider = st.session_state.llm_provider
+    if provider == "github_copilot":
+        ntid = normalize_ntid(st.session_state.copilot_connected_ntid)
+        github_token = retrieve_copilot_token(ntid)
+        with use_llm_provider(provider, github_token):
+            yield
+        return
+    with use_llm_provider("vox"):
+        yield
 
 
 def history_for_ask() -> list[dict]:
@@ -432,7 +485,12 @@ def complete_pending_turn() -> None:
             try:
                 from agent import ask
 
-                result = ask(prompt, history=history_for_ask(), schema=st.session_state.schema)
+                with active_llm_provider():
+                    result = ask(
+                        prompt,
+                        history=history_for_ask(),
+                        schema=st.session_state.schema,
+                    )
                 st.session_state.schema = result["schema"]
                 answer = result["answer"]
                 cypher = result.get("cypher") or ""
@@ -836,6 +894,59 @@ with st.sidebar:
     st.caption("Database: `neo4j` · read-only")
 
     st.divider()
+    st.subheader("LLM provider")
+    selected_provider = st.radio(
+        "Provider",
+        options=["Vox", "GitHub Copilot"],
+        key="llm_provider_label",
+    )
+    next_provider = "github_copilot" if selected_provider == "GitHub Copilot" else "vox"
+    if next_provider != st.session_state.llm_provider:
+        st.session_state.llm_provider = next_provider
+        st.session_state.messages = []
+        st.session_state.token_usage = empty_usage()
+
+    if st.session_state.llm_provider == "github_copilot":
+        st.caption("Save your own GitHub token once; it is retrieved only while processing your request.")
+        if not st.session_state.copilot_ntid:
+            st.info("Your Posit Connect NTID is unavailable. Enter your NTID manually.")
+        st.text_input(
+            "NTID",
+            key="copilot_ntid_input",
+            value=st.session_state.copilot_ntid,
+            placeholder="user.name",
+            on_change=load_saved_copilot_token,
+        )
+        ntid = st.session_state.copilot_ntid_input
+        with st.form("copilot_token_form", clear_on_submit=True):
+            copilot_token = st.text_input("GitHub Copilot token", type="password")
+            save_and_connect = st.form_submit_button("Save and connect", use_container_width=True)
+            load_saved_token = st.form_submit_button("Use saved token", use_container_width=True)
+        disconnect_copilot = st.button("Disconnect", use_container_width=True)
+        if save_and_connect:
+            try:
+                normalized_ntid = normalize_ntid(ntid)
+                save_copilot_token(normalized_ntid, copilot_token)
+                st.session_state.copilot_ntid = normalized_ntid
+                st.session_state.copilot_connected_ntid = normalized_ntid
+                st.success("GitHub Copilot token saved and connected.")
+            except (RuntimeError, ValueError) as exc:
+                st.error(str(exc))
+        if load_saved_token:
+            load_saved_copilot_token()
+        if st.session_state.copilot_token_lookup_status:
+            st.success(st.session_state.copilot_token_lookup_status)
+        if st.session_state.copilot_token_lookup_error:
+            st.warning(st.session_state.copilot_token_lookup_error)
+        if disconnect_copilot:
+            st.session_state.copilot_connected_ntid = ""
+            st.session_state.copilot_token_lookup_status = ""
+            st.success("GitHub Copilot disconnected for this browser session.")
+        if st.session_state.copilot_connected_ntid:
+            st.caption(f"Connected as: `{st.session_state.copilot_connected_ntid}`")
+        else:
+            st.info("Enter your NTID and GitHub Copilot token, then save and connect.")
+
     st.session_state.show_cypher = st.toggle(
         "Show generated Cypher", value=st.session_state.show_cypher
     )
