@@ -15,6 +15,7 @@ from github_token_vault import (
 )
 from neo4j_client import connection_summary, get_schema, load_env
 from posit_connect_identity import current_ntid
+from rsc_identity_component import rsc_ntid
 from vox_client import add_usage, empty_usage, use_llm_provider
 
 APP_NAME = "DID Insight"
@@ -180,6 +181,15 @@ def ensure_state() -> None:
         ntid = current_ntid(headers)
         if ntid:
             st.session_state.copilot_ntid = normalize_ntid(ntid)
+
+
+def resolve_rsc_ntid() -> None:
+    if st.session_state.copilot_ntid:
+        return
+    ntid = rsc_ntid()
+    if ntid:
+        st.session_state.copilot_ntid = normalize_ntid(ntid)
+        st.rerun()
 
 
 def load_saved_copilot_token() -> None:
@@ -887,6 +897,7 @@ def render_tlf_person_allocation() -> None:
 
 
 ensure_state()
+resolve_rsc_ntid()
 
 with st.sidebar:
     st.subheader("Connection")
