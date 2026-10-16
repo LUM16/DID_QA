@@ -82,6 +82,15 @@ Properties:
 - `Project_Name`
 - `TA`
 - `Indications`
+- `DSP_Apply_2_Step`
+- `DSP_US_Site`
+- `DSP_US_Site_Only`
+- `DSP_China_Site_iPort`
+- `DSP_Flag`
+- `DSP_Proportion_of_Non_US_Subject`
+- `DSP_Approved_2026_Exception`
+- `DSP_Nexus_Flag`
+- `DSP_Nexus_Country`
 
 ### Site
 
@@ -184,15 +193,19 @@ Properties:
 
 Properties:
 
-- `Project_Code`
-- `Milestone`
-- `Portfolio_ID`
 - `Name`
-- `Priority_Tier`
+- `Submission_Date`
 - `Submission_Lead`
+- `Submission_Lead1`
+- `Submission_Lead2`
+- `Project_Code`
+- `Asset_Code`
+- `Project_Name`
+- `Project_Short_Dsescription`
 - `TA`
-- `Region`
-- `Plan_Finish`
+- `MOA`
+- `Project_Generic_Name`
+- `Project_Trade_Name`
 
 ## Relationships
 
@@ -212,6 +225,12 @@ Properties:
 (Delivery)-[:HAS_ADAM {Generation, QC}]->(ADAM)
 (Delivery)-[:HAS_TLF {Generation, QC, File_Name, TLF_Number}]->(TLF)
 (Delivery)-[:SUPPORT_SUBMISSION]->(Submission)
+```
+
+### DID0-related relationships
+
+```cypher
+(DID0)-[:SUPPORT_SUBMISSION]->(Submission)
 ```
 
 ### Person-related relationships
@@ -311,14 +330,33 @@ Valid values:
 - `NO SUBJECTS`
 - `BOTH (PATIENTS AND VOLUNTEERS)`
 
-### `Submission.Milestone`
+### `Study_Info.DSP_Flag`
 
 Valid values:
 
-- `MAA Submission`
-- `NDA Submission`
-- `CNDA Submission`
-- `JNDA Submission`
+- `Permissible: No US data`
+- `Non-exempt: US + ROW`
+- `Non-exempt: US only`
+- `Exempt: Nexus`
+
+### `Study_Info.DSP_Nexus_Flag`
+
+Valid values:
+
+- `Y`
+- `N`
+
+### `Submission.TA`
+
+Valid values:
+
+- `Oncology`
+- `Internal Medicine`
+- `Inflammation & Immunology`
+- `Vaccines`
+- `Hospital`
+- `Other`
+- `Digital Medicine`
 
 ### `Unblind.Unblind_Programming_Support`
 
