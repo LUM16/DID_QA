@@ -163,7 +163,7 @@ async def _chat_with_github_copilot(system: str, user: str, github_token: str) -
     from copilot import CopilotClient
 
     load_env()
-    model = os.environ.get("COPILOT_MODEL") or "auto"
+    model = os.environ.get("COPILOT_MODEL") or "gpt-5.6-terra"
     async with CopilotClient(
         mode="empty",
         base_directory=_copilot_base_directory(github_token),
