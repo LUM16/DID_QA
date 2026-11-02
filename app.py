@@ -190,20 +190,20 @@ def resolve_rsc_ntid() -> None:
     if not ntid:
         return
     normalized_ntid = normalize_ntid(ntid)
-    if not st.session_state.copilot_ntid:
-        st.session_state.copilot_ntid = normalized_ntid
+    st.session_state.copilot_ntid = normalized_ntid
     if st.session_state.copilot_auto_connect_attempted_ntid == normalized_ntid:
         return
     st.session_state.copilot_auto_connect_attempted_ntid = normalized_ntid
-    st.session_state.copilot_ntid_input = normalized_ntid
     load_saved_copilot_token()
     st.rerun()
 
 
 def load_saved_copilot_token() -> None:
-    """Connect the current browser session when its entered NTID has a saved token."""
+    """Connect the current browser session when its identity has a saved token."""
     try:
-        ntid = normalize_ntid(st.session_state.copilot_ntid_input)
+        if not st.session_state.copilot_ntid:
+            raise ValueError("Unable to identify your Posit Connect account. Sign in and refresh.")
+        ntid = normalize_ntid(st.session_state.copilot_ntid)
         retrieve_copilot_token(ntid)
         st.session_state.copilot_ntid = ntid
         st.session_state.copilot_connected_ntid = ntid
@@ -211,7 +211,10 @@ def load_saved_copilot_token() -> None:
         st.session_state.copilot_token_lookup_status = "Saved GitHub Copilot token loaded."
     except (RuntimeError, ValueError) as exc:
         st.session_state.copilot_connected_ntid = ""
-        st.session_state.copilot_token_lookup_error = str(exc)
+        error = str(exc)
+        if error == "No GitHub Copilot token is saved for this NTID.":
+            error = "No GitHub Copilot token is saved for this account."
+        st.session_state.copilot_token_lookup_error = error
         st.session_state.copilot_token_lookup_status = ""
 
 
@@ -928,15 +931,8 @@ with st.sidebar:
     if st.session_state.llm_provider == "github_copilot":
         st.caption("Save your own GitHub token once; it is retrieved only while processing your request.")
         if not st.session_state.copilot_ntid:
-            st.info("Your Posit Connect NTID is unavailable. Enter your NTID manually.")
-        st.text_input(
-            "NTID",
-            key="copilot_ntid_input",
-            value=st.session_state.copilot_ntid,
-            placeholder="user.name",
-            on_change=load_saved_copilot_token,
-        )
-        ntid = st.session_state.copilot_ntid_input
+            st.info("Unable to identify your Posit Connect account. Sign in and refresh.")
+        ntid = st.session_state.copilot_ntid
         with st.form("copilot_token_form", clear_on_submit=True):
             copilot_token = st.text_input("GitHub Copilot token", type="password")
             save_and_connect = st.form_submit_button("Save and connect", use_container_width=True)
@@ -944,6 +940,8 @@ with st.sidebar:
         disconnect_copilot = st.button("Disconnect", use_container_width=True)
         if save_and_connect:
             try:
+                if not ntid:
+                    raise ValueError("Unable to identify your Posit Connect account. Sign in and refresh.")
                 normalized_ntid = normalize_ntid(ntid)
                 save_copilot_token(normalized_ntid, copilot_token)
                 st.session_state.copilot_ntid = normalized_ntid
@@ -962,9 +960,9 @@ with st.sidebar:
             st.session_state.copilot_token_lookup_status = ""
             st.success("GitHub Copilot disconnected for this browser session.")
         if st.session_state.copilot_connected_ntid:
-            st.caption(f"Connected as: `{st.session_state.copilot_connected_ntid}`")
+            st.caption("GitHub Copilot connected.")
         else:
-            st.info("Enter your NTID and GitHub Copilot token, then save and connect.")
+            st.info("Enter your GitHub Copilot token, then save and connect.")
 
     st.session_state.show_cypher = st.toggle(
         "Show generated Cypher", value=st.session_state.show_cypher
