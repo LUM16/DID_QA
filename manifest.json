@@ -20,7 +20,7 @@
   },
   "files": {
     "requirements.txt": {
-      "checksum": "9864d425a2f34d7b097ad61a1eb77b8d"
+      "checksum": "4aa561df0b482fcfbc4aa90ee1d15985"
     },
     ".env.example": {
       "checksum": "8e308fb2278c242b241b9bc24a137246"
